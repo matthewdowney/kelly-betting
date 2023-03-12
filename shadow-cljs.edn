@@ -1,0 +1,21 @@
+; use deps.edn with the :shadow alias
+{:deps {:aliases [:shadow]}
+ :builds {:app {:target :browser
+                :output-dir "public/js"
+                :asset-path "js"
+                :modules {:main {:entries [com.mjdowney.kelly-betting.noise]}}
+                :devtools {:preloads [hashp.core]
+                           :repl-init-ns com.mjdowney.kelly-betting.noise
+                           :repl-pprint true
+                           :http-root "public"
+                           :http-port 8020}}
+
+          #_#_:site {:target :browser
+                 :output-dir "../matthewdowney.github.io/static/js/ftx-simulator"
+                 :asset-path "/static/js/ftx-simulator"
+                 :modules {:main {:entries [simulator.core]}}
+                 :devtools {:preloads [hashp.core]
+                            :before-load simulator.core/stop
+                            :after-load simulator.core/start
+                            :http-root "public"
+                            :http-port 8020}}}}

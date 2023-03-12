@@ -1,6 +1,7 @@
 (ns com.mjdowney.kelly-betting.noise
   (:require [reagent.dom :as rdom]
             [reagent.core :as r]
+            [leva.core :as leva]
             ["plotly.js-dist-min" :as plotlyjs]))
 
 ;;; React / Reagent version of a Plotly component
@@ -18,20 +19,25 @@
                                (let [new-argv (rest (r/argv this))]
                                  (-plotly-react plot-id (first new-argv))))})))
 
+;;; App
+
+(defonce controls (r/atom {:width 500 :height 500}))
+
 (defn app []
-  [:div "Hello, world!"
+  [:div
+   "Hello, world!"
+   [leva/Controls {:folder {:name "Plot Controls"} :atom controls}]
    [plotly {:data [{:x [1 2 3]
                     :y [2 6 3]
                     :type "scatter"
                     :mode "lines+markers"
                     :marker {:color "red"}}]
-            :layout {:title "A Fancy Plot"}}]])
+            :layout {:title "A Fancy Plot"
+                     :width (:width @controls)
+                     :height (:height @controls)}}]])
 
 ;;; Lifecycle / entry point
 
-(defn start []
-  (js/console.log "starting...")
-  (rdom/render [app] (.getElementById js/document "app")))
-
+(defn start [] (rdom/render [app] (.getElementById js/document "app")))
 (defn stop [] (js/console.log "stopping..."))
 (defn ^:export init [] (start))

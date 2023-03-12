@@ -5,6 +5,7 @@
   org.clojure/core.async    {:mvn/version "1.6.673"}
   reagent/reagent           {:mvn/version "1.1.1"
                              :exclusions  [cljsjs/react cljsjs/react-dom cljsjs/react-dom-server]}
+  org.mentat/leva.cljs      {:mvn/version "0.2.2"}
   kixi/stats                {:mvn/version "0.5.5"}
   hashp/hashp               {:mvn/version "0.2.2"}}
 

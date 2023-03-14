@@ -3,12 +3,12 @@
  :builds {:app {:target :browser
                 :output-dir "public/js"
                 :asset-path "js"
-                :modules {:main {:entries [com.mjdowney.kelly-betting.noise]}}
+                :modules {:main {:entries [com.mjdowney.kelly-noise]}}
                 :devtools {:preloads [hashp.core]
-                           :repl-init-ns com.mjdowney.kelly-betting.noise
+                           :repl-init-ns com.mjdowney.kelly-noise
                            :repl-pprint true
-                           :before-load com.mjdowney.kelly-betting.noise/stop
-                           :after-load com.mjdowney.kelly-betting.noise/start
+                           :before-load com.mjdowney.kelly-noise/stop
+                           :after-load com.mjdowney.kelly-noise/start
                            :http-root "public"
                            :http-port 8020}}
 

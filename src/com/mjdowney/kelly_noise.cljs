@@ -24,9 +24,10 @@
 ;;  - Simulate a variety of bets
 (ns com.mjdowney.kelly-noise
   (:require [com.mjdowney.kelly.plotly :as plotly]
+            [goog.functions :as gfn]
             [leva.core :as leva]
-            [reagent.core :as r]
             ["seedrandom" :as seedrandom]
+            [reagent.core :as r]
             [reagent.dom :as rdom]
             [taoensso.encore :as enc]))
 
@@ -63,8 +64,8 @@
    [leva/Controls
     {:folder {:name "Simulation" :settings {:order 1}}
      :atom simulation
-     :schema {:portfolios {:label "Portfolios" :min 1 :max 1000 :step 1}
-              :bets {:label "Bets" :min 1 :max 1000 :step 1}
+     :schema {:portfolios {:label "Portfolios"}
+              :bets {:label "Bets"}
               :bet-size {:label "Bet size" :min 0 :max 1 :step 0.01}}}]
    [leva/Controls
     {:folder {:name "View" :settings {:order 2 :collapsed true}}
@@ -107,27 +108,43 @@
               (subvec bets 1)
               random-number-generator)))))))
 
+(defn recompute-sim-data [{:keys [portfolios bets] :as sim} territory]
+  (let [rng (seedrandom 1)
+        bet-terms (build-bets territory bets)]
+    (mapv
+      (fn [_]
+        {:y          (into [] (simulate-portfolio sim 1.0 bet-terms rng))
+         :opacity    0.15
+         :showlegend false
+         :type       :scatter})
+      (range portfolios))))
+
+;; TODO: Perhaps re-frame or rendering one portfolio at a time would improve the
+;;       responsiveness here.
+(defn simulation-plot []
+  (let [data (r/atom [])
+        cache (atom [])
+        recompute (gfn/debounce
+                    (fn [sim territory]
+                      (when-not (= @cache [sim territory])
+                        (reset! cache [sim territory])
+                        (reset! data (recompute-sim-data sim territory))))
+                    20)]
+    (fn []
+      (recompute @simulation @territory)
+      [plotly/plotly
+       {:data   @data
+        :layout {:title  "Portfolios"
+                 :xaxis {:title "Bet #"}
+                 :yaxis {:title "Bankroll"
+                         :type (if (:y-axis-log @view) "log" "linear")}
+                 :width  (:width @view)
+                 :height (:height @view)}}])))
+
 (defn app []
-  (let [{:keys [portfolios bets] :as sim} @simulation
-        bet-terms (build-bets @territory bets)
-        rng (seedrandom 1)]
-    [:div
-     [controls]
-     [plotly/plotly
-      {:data   (mapv ; simulate 100 portfolios
-                 (fn [_]
-                   {:y          (into []
-                                  (simulate-portfolio sim 1.0 bet-terms rng))
-                    :opacity    0.15
-                    :showlegend false
-                    :type       :scatter})
-                 (range portfolios))
-       :layout {:title  "Portfolios"
-                :xaxis {:title "Bet #"}
-                :yaxis {:title "Bankroll"
-                        :type (if (:y-axis-log @view) "log" "linear")}
-                :width  (:width @view)
-                :height (:height @view)}}]]))
+  [:div
+   [controls]
+   [simulation-plot]])
 
 ;;; Lifecycle / entry point
 

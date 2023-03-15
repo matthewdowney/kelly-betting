@@ -94,11 +94,14 @@
      :bins       100
      :cumulative false
      :nth-perc   50    ; highlight some percentile to show on plot (50 = median)
-     :width      800
+     :width      575
      :height     500}))
 
 (defonce view
-  (r/atom {:active "portfolios"}))
+  (r/atom
+    {:active "portfolios" ; one of #{"portfolios" "terminal-values" "optimize"}
+     :optimize "bet-size"
+     :target "nth-perc"}))
 
 (def view->plot-settings
   {::all            #{:width :height :log-axis :nth-perc}
@@ -129,16 +132,25 @@
                  :win-frac  {:label "Win frac"}
                  :ev        {:label "EV" :step 0.01}}}])))
 
+(declare compute-optimizations)
 (defn controls
   "Float a Leva component on the page with controls for the simulation."
   []
   (let [t @territory]
-    [:div {:title t}
+    [:div
      [leva/Controls
       {:folder {:name "View" :settings {:order -1}}
        :atom   view
        :schema {:active {:options {"Portfolios over time" :portfolios
-                                   "Terminal values"      :terminal-values}}}}]
+                                   "Terminal values"      :terminal-values
+                                   "Optimize"             :optimize}}
+                :target {:options {"nth percentile return" :nth-perc}
+                         :render (fn [] (= "optimize" (:active @view)))}
+                :optimize {:options {"Bet size" :bet-size}
+                           :render (fn [] (= "optimize" (:active @view)))}
+                :compute (leva/button
+                           compute-optimizations
+                           {:render (fn [] (= "optimize" (:active @view)))})}}]
 
      [territory-controls]
 
@@ -184,57 +196,112 @@
               (subvec bets 1)
               random-number-generator)))))))
 
-(defn recompute-sim-data [sequence {:keys [portfolios bets] :as sim} territory]
+(defn run-simulation [{:keys [simulation territory]}]
   (let [rng (seedrandom 1)
+        {:keys [portfolios bets]} simulation
         bet-terms (build-bets territory bets)]
     {:portfolios
      (mapv
        (fn [_]
-         {:y          (into [] (simulate-portfolio sim 1.0 bet-terms rng))
+         {:y          (vec (simulate-portfolio simulation 1.0 bet-terms rng))
           :opacity    0.15
           :showlegend false
           :type       :scatter})
        (range portfolios))
-     :nth-perc nil
-     :sequence (inc sequence)}))
-
-;;; Plotting code
+     :nth-perc nil}))
 
 (defn percentile [xs perc]
   (let [index (int (Math/floor (* (dec (count xs)) (/ perc 100))))]
     (nth xs index)))
 
+(defmulti inputs-for-optimization identity)
+(defmethod inputs-for-optimization "bet-size" [_]
+  (let [s @simulation
+        t @territory]
+    (map
+      (juxt #(/ % 100.0)
+        (fn [size]
+          {:simulation (assoc s :bet-size (/ size 100.0))
+           :territory t}))
+      (range 1 101))))
+
+(defmulti rewardf-for-target identity)
+(defmethod rewardf-for-target "nth-perc" [_]
+  (let [nth-perc (get @plot-settings :nth-perc)]
+    (fn [{:keys [portfolios]}]
+      (percentile
+        (vec (sort (map (comp peek :y) portfolios)))
+        nth-perc))))
+
+(defn optimization-data
+  ([{:keys [target optimize]}]
+   (let [inputs (inputs-for-optimization optimize)
+         reward-fn (rewardf-for-target target)]
+     (optimization-data inputs reward-fn)))
+  ([inputs reward-fn]
+   (lazy-seq
+     (when-let [[input sim-data] (first inputs)]
+       (cons
+         [input (reward-fn (run-simulation sim-data))]
+         (optimization-data (rest inputs) reward-fn))))))
+
+;;; Plotting code
+
+(defn incr-into-atom
+  "Incrementally reduce the `from-seq` into the `to-atom` state, in chunks of
+  `chunk-size`, yielding with js/setTimeout between chunks."
+  ([to-atom chunk-size rf from-seq]
+   (let [proc-id (gensym)]
+     (swap! to-atom assoc ::incr-into-atom proc-id)
+     (incr-into-atom to-atom rf chunk-size from-seq proc-id)))
+  ([to-atom chunk-size rf from-seq proc-id]
+   (loop [idx 0
+          from-seq from-seq]
+     (if (< idx chunk-size)
+       (let [state @to-atom]
+         (when (= (::incr-into-atom state) proc-id)
+           (if-let [x (first from-seq)]
+             (do
+               (reset! to-atom (rf state x))
+               (recur (inc idx) (rest from-seq)))
+             (reset! to-atom (rf state)))))
+       (js/setTimeout
+         #(incr-into-atom to-atom rf chunk-size from-seq proc-id)
+         0)))))
+
 (defn compute-nth-perc
-  "Progressively compute the nth percentile of the bankroll over time, adding
-  it into the data atom under :nth-perc, tagging with [:nth-perc :complete]
-  true when finished."
-  [data perc idx sequence]
-  (when (= (:sequence @data) sequence)
-    (let [{:keys [portfolios nth-perc]} @data]
-      (if (< idx (if-let [p (first portfolios)] (count (:y p)) 0))
-        (let [sorted (vec (sort (keep (comp #(nth % idx nil) :y) portfolios)))
-              median (percentile sorted perc)
-              nth-perc (or nth-perc
-                         {:y           []
-                          :opacity     1
-                          :showledgend true
-                          :perc        perc
-                          :line        {:width 3}
-                          :name        (str "p" perc)})]
-          (swap! data assoc :nth-perc
-            (update nth-perc :y conj median))
-          (if (zero? (mod idx 10))
-            (js/window.setTimeout
-              (fn []
-                (compute-nth-perc data perc (inc idx) sequence)))
-            (recur data perc (inc idx) sequence)))
-        (swap! data assoc-in [:nth-perc :complete] true)))))
+  "A lazy sequence of the bankroll values for the nth percentile portfolio."
+  [{:keys [portfolios]} nth-perc]
+  (let [len (if-let [p (first portfolios)] (count (:y p)) 0)]
+    (letfn [(nth-percs [idx]
+              (lazy-seq
+                (when (< idx len)
+                  (cons
+                    (percentile
+                      (vec (sort (keep (comp #(nth % idx nil) :y) portfolios)))
+                      nth-perc)
+                    (nth-percs (inc idx))))))]
+      (nth-percs 0))))
+
+(defn conj-nth-perc
+  ([perc {:keys [nth-perc] :as data} data-point]
+   (let [nth-perc (or nth-perc
+                    {:y           []
+                     :opacity     1
+                     :showledgend true
+                     :perc        perc
+                     :line        {:width 3}
+                     :name        (str "p" perc)})]
+     (assoc data :nth-perc
+       (update nth-perc :y conj data-point))))
+  ([perc data]
+   (assoc-in data [:nth-perc :complete] true)))
 
 (defn vline [x & {:keys [] :as line}]
   {:type :line :x0 x :y0 0 :x1 x :y1 1 :yref :paper :line line})
 
 (defn top-annotation [x text & {:keys [] :as font}]
-  {:x x :y 1.05 :xref :x :yref :paper :showarrow false :text text :font font})
+  {:x x :y 1.06 :xref :x :yref :paper :showarrow false :text text :font font})
 
 (defn annotate-nth-perc [perc med]
   (let [lbl (str "p" perc " = 10^" (enc/round2 med))]
@@ -270,19 +337,67 @@
                           (xf (peek (:y nth-perc))))]
           (annotate-nth-perc (:perc nth-perc) nth')))}]))
 
+(defonce optimization-state (r/atom {:x [] :y []}))
+
+(defn compute-optimizations []
+  (reset! optimization-state {:x [] :y []})
+  ; If there are a lot of portfolios, go one data point at a time
+  (let [chunk-size (cond
+                     (<= (:portfolios @simulation) 50)
+                     10
+
+                     (<= (:portfolios @simulation) 100)
+                     2
+
+                     :else 1)]
+    (incr-into-atom optimization-state chunk-size
+      (fn [state data-point]
+        (-> state
+            (update :x conj (first data-point))
+            (update :y conj (peek data-point))))
+      (optimization-data @view))))
+
+(defn optimization-plot []
+  (let [{:keys [x y]} @optimization-state
+        {:keys [target optimize]} @view]
+    [plotly/plotly
+     {:data   [{:x x
+                :y y
+                :opacity    1
+                :showlegend false
+                :type       :scatter}]
+      :layout {:title  "Optimization"
+               :xaxis  {:title optimize}
+               :yaxis  {:title target
+                        :type  (if (:log-axis @plot-settings)
+                                 "log"
+                                 "linear")}
+               :width  (:width @plot-settings)
+               :height (:height @plot-settings)}}]))
+
+(comment
+  (compute-optimizations)
+  (def od (optimization-data @view))
+  (reset! optimization-state {:x (mapv first od) :y (mapv peek od)})
+  )
+
 (defn plot [{:keys [portfolios nth-perc] :as data}]
   ; Either plot a histogram or a line chart with each of the simulated
   ; portfolios
-  (if (= (:active @view) "terminal-values")
-    [histogram data]
-    [plotly/plotly
-     {:data   (enc/conj-some portfolios nth-perc)
-      :layout {:title  "Portfolios"
-               :xaxis  {:title "Bet #"}
-               :yaxis  {:title "Bankroll"
-                        :type  (if (:log-axis @plot-settings) "log" "linear")}
-               :width  (:width @plot-settings)
-               :height (:height @plot-settings)}}]))
+  (case (:active @view)
+    "terminal-values" [histogram data]
+    "optimize" [optimization-plot]
+    "portfolios" [plotly/plotly
+                  {:data   (enc/conj-some portfolios nth-perc)
+                   :layout {:title  "Portfolios"
+                            :xaxis  {:title "Bet #"}
+                            :yaxis  {:title "Bankroll"
+                                     :type  (if (:log-axis @plot-settings)
+                                              "log"
+                                              "linear")}
+                            :width  (:width @plot-settings)
+                            :height (:height @plot-settings)}}]
+    [:div "Error: no clause for active view: " (:active @view)]))
 
 (defn plot-recompute-wrapper
   "Wrap the actual plotly components and debounce the computation of simulation
@@ -294,11 +409,14 @@
                     (fn [sim territory perc]
                       (when-not (= @cache [sim territory perc])
                         (reset! cache [sim territory perc])
-                        (let [s (:sequence
-                                 (swap! data
-                                   (fn [{:keys [sequence]}]
-                                     (recompute-sim-data sequence sim territory))))]
-                          (compute-nth-perc data perc 0 s))))
+                        (let [data-state (reset! data
+                                           (run-simulation
+                                             {:simulation sim
+                                              :territory territory}))]
+                          (incr-into-atom data 10
+                            (partial conj-nth-perc perc)
+                            (compute-nth-perc data-state perc)))))
+                        #_(compute-nth-perc data perc 0 s)
                     20)]
     (fn []
       (recompute @simulation @territory (:nth-perc @plot-settings))

@@ -8,6 +8,8 @@
 ;; Views
 ;;  - Plot of portfolio value over time
 ;;  - Histogram of terminal values
+;;  - Non-random plot: all the wins then all the losses, the reverse, then
+;;    interspersed.
 ;; Functionality:
 ;;  - Parameters are dynamic
 ;;  - Generalized plot of A vs B holding all else constant: e.g. bet size vs
@@ -22,8 +24,19 @@
 ;;  - Simulate a series of low-probability, high-payoff bets
 ;;  - Simulate a series of high-probability, low-payoff bets
 ;;  - Simulate a variety of bets
+;;
+;; It'd be cool to also be able to simulate some mix of bets. E.g. define some
+;; category of bets as 'high variance' and assume a portfolio of bets where 25%
+;; are high variance and the rest are low variance.
+;;
+;; One difficulty with all of this is that there are so many degrees of freedom
+;; and things one might want to simulate, so it's hard to encapsulate it in a
+;; UI. I wonder if there could be presets + user-provided functions for (1)
+;; building the series of bets presented to the agent, and then (2) making
+;; decisions for the agent. This would be pretty robust.
 (ns com.mjdowney.kelly-noise
   (:require [com.mjdowney.kelly.plotly :as plotly]
+            [com.mjdowney.kelly.leva :refer [leva-sync]]
             [goog.functions :as gfn]
             [leva.core :as leva]
             ["seedrandom" :as seedrandom]
@@ -35,52 +48,74 @@
 
 (defonce territory
   (r/atom
-    {:p-win 0.50
-     :ev 1.1
-     :loss 1.0}))
+    {:p-win     0.50
+     :ev        1.1
+     :loss-frac 1.0
+     :win-frac  1.2}))
 
 (defonce simulation
   (r/atom
     {:portfolios 100
-     :bets 100
-     :bet-size 0.25}))
+     :bets       100
+     :bet-size   0.25}))
 
 (defonce view
   (r/atom
-    {:width 800
-     :height 500
+    {:width      800
+     :height     500
      :y-axis-log true}))
+
+(defn recompute-ev [x k v]
+  (let [{:keys [p-win win-frac loss-frac] :as x} (assoc x k v)]
+    (assoc x :ev (+ (* p-win win-frac) (* (- 1 p-win) (- 1 loss-frac))))))
+
+(defn recompute-win-frac [x k v]
+  (let [{:keys [p-win ev loss-frac] :as x} (assoc x k v)]
+    (assoc x :win-frac (/ (- ev (* (- 1 p-win) (- 1 loss-frac))) p-win))))
+
+(defn territory-controls []
+  (let [!territory (leva-sync territory
+                     {:loss-frac #(recompute-ev %1 :loss-frac %2)
+                      :win-frac  #(recompute-ev %1 :win-frac %2)
+                      :p-win     #(recompute-ev %1 :p-win %2)
+                      :ev        #(recompute-win-frac %1 :ev %2)})]
+    (fn []
+      [leva/Controls
+       {:folder {:name "Territory" :settings {:order 0}}
+        :atom   !territory
+        :schema {:p-win     {:label "P(win)" :min 0 :max 1 :step 0.01}
+                 :loss-frac {:label "Loss frac" :min 0 :max 1 :step 0.01}
+                 :win-frac  {:label "Win frac"}
+                 :ev        {:label "EV" :step 0.01}}}])))
 
 (defn controls
   "Float a Leva component on the page with controls for the simulation."
   []
-  [:<>
-   [leva/Controls
-    {:folder {:name "Territory" :settings {:order 0}}
-     :atom territory
-     :schema {:p-win {:label "P(win)" :min 0 :max 1 :step 0.01}
-              :ev {:label "EV" :min 0 :max 10 :step 0.1}
-              :loss {:label "Loss %" :min 0 :max 1 :step 0.01}}}]
-   [leva/Controls
-    {:folder {:name "Simulation" :settings {:order 1}}
-     :atom simulation
-     :schema {:portfolios {:label "Portfolios"}
-              :bets {:label "Bets"}
-              :bet-size {:label "Bet size" :min 0 :max 1 :step 0.01}}}]
-   [leva/Controls
-    {:folder {:name "View" :settings {:order 2 :collapsed true}}
-     :atom view}]])
+  (let [t @territory]
+    [:div {:title t}
+     [territory-controls]
+
+     [leva/Controls
+      {:folder {:name "Simulation" :settings {:order 1}}
+       :atom   simulation
+       :schema {:portfolios {:label "Portfolios"}
+                :bets       {:label "Bets"}
+                :bet-size   {:label "Bet size" :min 0 :max 1 :step 0.01}}}]
+
+     [leva/Controls
+      {:folder {:name "View" :settings {:order 2 :collapsed true}}
+       :atom   view}]]))
 
 ;;; Simulation code
 
-(defn build-bet [{:keys [p-win ev loss]}]
+(defn build-bet [{:keys [p-win ev loss-frac]}]
   (let [p-lose (/ (- 100 (long (* p-win 100))) 100.0)
-        gain (/ (- ev (* p-lose loss)) p-win)]
-    {:p-win p-win
-     :gain  (enc/round* :round 4 gain)
-     :loss loss
-     :p-lose p-lose
-     :ev ev}))
+        win-frac (/ (- ev (* p-lose loss-frac)) p-win)]
+    {:p-win     p-win
+     :win-frac  (enc/round* :round 4 win-frac)
+     :loss-frac loss-frac
+     :p-lose    p-lose
+     :ev        ev}))
 
 (defn build-bets
   "Build a series of `n` betting opportunities according to the specified
@@ -94,13 +129,13 @@
   Returns a sequence of bankroll values for each bet."
   [{:keys [bet-size] :as behavior} bankroll bets random-number-generator]
   (lazy-seq
-    (when-let [{:keys [p-win gain loss p-lose]} (first bets)]
+    (when-let [{:keys [p-win win-frac loss-frac p-lose]} (first bets)]
       (if (zero? bankroll)
         (repeat (count bets) 0.0)
         (let [stake (* bet-size bankroll)
               outcome (if (< (random-number-generator) p-win)
-                        (+ bankroll (* gain stake))
-                        (- bankroll (* loss stake)))]
+                        (+ bankroll (* win-frac stake))
+                        (- bankroll (* loss-frac stake)))]
           (cons outcome
             (simulate-portfolio
               behavior
@@ -135,9 +170,9 @@
       [plotly/plotly
        {:data   @data
         :layout {:title  "Portfolios"
-                 :xaxis {:title "Bet #"}
-                 :yaxis {:title "Bankroll"
-                         :type (if (:y-axis-log @view) "log" "linear")}
+                 :xaxis  {:title "Bet #"}
+                 :yaxis  {:title "Bankroll"
+                          :type  (if (:y-axis-log @view) "log" "linear")}
                  :width  (:width @view)
                  :height (:height @view)}}])))
 

@@ -6,14 +6,29 @@
 ;;   - Noise around perception (both in absolute and percentage terms)
 ;;  - Bet size, number of portfolios, and number of bets
 ;; Views
-;;  - Plot of portfolio value over time
+;;  - Plot of portfolio value over time (+ median portfolio!)
 ;;  - Histogram of terminal values
+;;
+;;    ***
+;;  - Comparisons? So there's a button to take a snapshot to save a comparison
+;;    ***
+;;
+;;  - 3D plot of ... variance, noise, and kelly fraction?
+;;
 ;;  - Non-random plot: all the wins then all the losses, the reverse, then
 ;;    interspersed.
 ;; Functionality:
 ;;  - Parameters are dynamic
 ;;  - Generalized plot of A vs B holding all else constant: e.g. bet size vs
 ;;    median terminal value
+;;
+;; Questions to answer:
+;;  - For this territory, how does noise impact optimal bet size? (I.e. optimal
+;;    bet size on the x-axis, noise on the y-axis)
+;;  - Ditto for risk of ruin
+;;  - What % of portfolios lose money for some bet size?
+;;  - What is the bet size with the highest median return where < x% of
+;;    portfolios lose money?
 ;;
 ;; Separately, a simpler thing that would also be useful and nice to have would
 ;; be an N-outcome optimal bet size simulator, that allows you to add as many
@@ -44,11 +59,15 @@
             [reagent.dom :as rdom]
             [taoensso.encore :as enc]))
 
-;;; Controls for the simulation
+;;; Controls for the simulation via leva-cljs
 
-(defn recompute-ev [x k v]
-  (let [{:keys [p-win win-frac loss-frac] :as x} (assoc x k v)]
-    (assoc x :ev (+ (* p-win win-frac) (* (- 1 p-win) (- 1 loss-frac))))))
+;; TODO: Certain values still cause Leva to go into an update loop
+(defn recompute-ev
+  ([x]
+   (recompute-ev x :p-win (:p-win x)))
+  ([x k v]
+   (let [{:keys [p-win win-frac loss-frac] :as x} (assoc x k v)]
+     (assoc x :ev (+ (* p-win win-frac) (* (- 1 p-win) (- 1 loss-frac)))))))
 
 (defn recompute-win-frac [x k v]
   (let [{:keys [p-win ev loss-frac] :as x} (assoc x k v)]
@@ -57,16 +76,15 @@
 (defonce territory
   (r/atom
     (recompute-ev
-      {:p-win     0.50
-       :ev        1.1
-       :loss-frac 1.0
-       :win-frac  2.2}
-      :win-frac 2.2)))
+      {:p-win     0.50 ; chance of winning the wager
+       :win-frac  2.2  ; multiple of bet size returned on win (1 = break even)
+       :loss-frac 1.0  ; amount lost on loss (1 = lose entire stake)
+       #_#_:ev 1.1}))) ; expected value of the wager, follows from other params
 
 (defonce simulation
   (r/atom
-    {:portfolios 100
-     :bets       100
+    {:portfolios 100   ; number of portfolios to simulate
+     :bets       100   ; number of bets per portfolio
      :bet-size   0.25}))
 
 (defonce plot-settings
@@ -74,6 +92,7 @@
     {:log-axis   true
      :bins       100
      :cumulative false
+     :nth-perc   50    ; highlight some percentile to show on plot (50 = median)
      :width      800
      :height     500}))
 
@@ -81,7 +100,7 @@
   (r/atom {:active "portfolios"}))
 
 (def view->plot-settings
-  {::all            #{:width :height :log-axis}
+  {::all            #{:width :height :log-axis :nth-perc}
    :terminal-values #{:bins :cumulative}})
 
 (def plot-settings-schema
@@ -132,7 +151,8 @@
      [leva/Controls
       {:folder {:name "Plot settings" :settings {:order 2 :collapsed true}}
        :schema (enc/nested-merge plot-settings-schema
-                 {:bins {:min 1 :step 1}})
+                 {:bins {:min 1 :step 1}
+                  :nth-perc {:min 0 :max 100 :step 1}})
        :atom   plot-settings}]]))
 
 ;;; Simulation code
@@ -163,39 +183,99 @@
               (subvec bets 1)
               random-number-generator)))))))
 
-(defn recompute-sim-data [{:keys [portfolios bets] :as sim} territory]
+(defn recompute-sim-data [sequence {:keys [portfolios bets] :as sim} territory]
   (let [rng (seedrandom 1)
         bet-terms (build-bets territory bets)]
-    (mapv
-      (fn [_]
-        {:y          (into [] (simulate-portfolio sim 1.0 bet-terms rng))
-         :opacity    0.15
-         :showlegend false
-         :type       :scatter})
-      (range portfolios))))
+    {:portfolios
+     (mapv
+       (fn [_]
+         {:y          (into [] (simulate-portfolio sim 1.0 bet-terms rng))
+          :opacity    0.15
+          :showlegend false
+          :type       :scatter})
+       (range portfolios))
+     :nth-perc nil
+     :sequence (inc sequence)}))
 
-(defn plot [data]
-  (if (= (:active @view) "terminal-values")
-    ;; Plotly histogram with x log scale of the terminal portfolio values
-    (let [{:keys [log-axis cumulative bins width height]} @plot-settings
-          xf (if log-axis #(Math/log %) identity)
-          terminal-values (mapv (comp xf peek :y) data)]
-      [plotly/plotly
-       {:data   [{:x          terminal-values
-                  :nbinsx     bins
-                  :type       :histogram
-                  :cumulative {:enabled cumulative}
-                  :histnorm   :probability
-                  :opacity    0.55
-                  :showlegend true}]
-        :layout {:title  "Terminal Values"
-                 :xaxis  {:title "Log(Return multiple)"}
-                 :yaxis  {:title (if cumulative "Cumulative %" "Frequency")}
-                 :width  width
-                 :height height}}])
+;;; Plotting code
 
+(defn percentile [xs perc]
+  (let [index (int (Math/floor (* (dec (count xs)) (/ perc 100))))]
+    (nth xs index)))
+
+(defn compute-nth-perc
+  "Progressively compute the nth percentile of the bankroll over time, adding
+  it into the data atom under :nth-perc, tagging with [:nth-perc :complete]
+  true when finished."
+  [data perc idx sequence]
+  (when (= (:sequence @data) sequence)
+    (let [{:keys [portfolios nth-perc]} @data]
+      (if (< idx (if-let [p (first portfolios)] (count (:y p)) 0))
+        (let [sorted (vec (sort (keep (comp #(nth % idx nil) :y) portfolios)))
+              median (percentile sorted perc)
+              nth-perc (or nth-perc
+                         {:y           []
+                          :opacity     1
+                          :showledgend true
+                          :perc        perc
+                          :line        {:width 3}
+                          :name        (str "p" perc)})]
+          (swap! data assoc :nth-perc
+            (update nth-perc :y conj median))
+          (if (zero? (mod idx 10))
+            (js/window.setTimeout
+              (fn []
+                (compute-nth-perc data perc (inc idx) sequence)))
+            (recur data perc (inc idx) sequence)))
+        (swap! data assoc-in [:nth-perc :complete] true)))))
+
+(defn vline [x & {:keys [] :as line}]
+  {:type :line :x0 x :y0 0 :x1 x :y1 1 :yref :paper :line line})
+
+(defn top-annotation [x text & {:keys [] :as font}]
+  {:x x :y 1.05 :xref :x :yref :paper :showarrow false :text text :font font})
+
+(defn annotate-nth-perc [perc med]
+  (let [lbl (str "p" perc " = 10^" (enc/round2 med))]
+    {:shapes      [(vline med :width 2 :color "steelblue")]
+     :annotations [(top-annotation med lbl :color "steelblue")]}))
+
+(defn histogram
+  "Histogram of the final portfolio values."
+  [{:keys [portfolios nth-perc] :as data}]
+  (let [{:keys [log-axis cumulative bins width height]} @plot-settings
+        xf (if log-axis #(Math/log %) identity)
+        terminal-values (mapv (comp xf peek :y) portfolios)]
     [plotly/plotly
-     {:data   data
+     {:data
+      [{:x          terminal-values
+        :nbinsx     bins
+        :type       :histogram
+        :cumulative {:enabled cumulative}
+        :histnorm   :probability
+        :opacity    0.55
+        :showlegend false}]
+      :layout
+      (merge
+        {:title  "Terminal Values"
+         :xaxis  {:title "Log(Return multiple)"}
+         :yaxis  (enc/assoc-some
+                   {:title (if cumulative "Cumulative %" "Frequency")}
+                   :dtick (when cumulative 0.10))
+         :width  width
+         :height height}
+        ; When the nth percentile is known, annotate it on the plot
+        (when-let [nth' (when (:complete nth-perc)
+                          (xf (peek (:y nth-perc))))]
+          (annotate-nth-perc (:perc nth-perc) nth')))}]))
+
+(defn plot [{:keys [portfolios nth-perc] :as data}]
+  ; Either plot a histogram or a line chart with each of the simulated
+  ; portfolios
+  (if (= (:active @view) "terminal-values")
+    [histogram data]
+    [plotly/plotly
+     {:data   (enc/conj-some portfolios nth-perc)
       :layout {:title  "Portfolios"
                :xaxis  {:title "Bet #"}
                :yaxis  {:title "Bankroll"
@@ -203,25 +283,30 @@
                :width  (:width @plot-settings)
                :height (:height @plot-settings)}}]))
 
-;; TODO: Perhaps re-frame or rendering one portfolio at a time would improve the
-;;       responsiveness here.
-(defn simulation-plot []
-  (let [data (r/atom [])
+(defn plot-recompute-wrapper
+  "Wrap the actual plotly components and debounce the computation of simulation
+  / plot data from the settings to make the page more responsive."
+  []
+  (let [data (r/atom {})
         cache (atom [])
         recompute (gfn/debounce
-                    (fn [sim territory]
-                      (when-not (= @cache [sim territory])
-                        (reset! cache [sim territory])
-                        (reset! data (recompute-sim-data sim territory))))
+                    (fn [sim territory perc]
+                      (when-not (= @cache [sim territory perc])
+                        (reset! cache [sim territory perc])
+                        (let [s (:sequence
+                                 (swap! data
+                                   (fn [{:keys [sequence]}]
+                                     (recompute-sim-data sequence sim territory))))]
+                          (compute-nth-perc data perc 0 s))))
                     20)]
     (fn []
-      (recompute @simulation @territory)
+      (recompute @simulation @territory (:nth-perc @plot-settings))
       [plot @data])))
 
 (defn app []
   [:div
    [controls]
-   [simulation-plot]])
+   [plot-recompute-wrapper]])
 
 ;;; Lifecycle / entry point
 

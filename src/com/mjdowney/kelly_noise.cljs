@@ -61,7 +61,6 @@
 
 ;;; Controls for the simulation via leva-cljs
 
-;; TODO: Certain values still cause Leva to go into an update loop
 (defn recompute-ev
   ([x]
    (recompute-ev x :p-win (:p-win x)))
@@ -71,7 +70,9 @@
 
 (defn recompute-win-frac [x k v]
   (let [{:keys [p-win ev loss-frac] :as x} (assoc x k v)]
-    (assoc x :win-frac (/ (- ev (* (- 1 p-win) (- 1 loss-frac))) p-win))))
+    (if (zero? p-win)
+      (assoc x :win-frac 1.0 :ev (* ev (- 1 loss-frac)))
+      (assoc x :win-frac (/ (- ev (* (- 1 p-win) (- 1 loss-frac))) p-win)))))
 
 (defonce territory
   (r/atom
@@ -149,7 +150,7 @@
                 :bet-size   {:label "Bet size" :min 0 :max 1 :step 0.01}}}]
 
      [leva/Controls
-      {:folder {:name "Plot settings" :settings {:order 2 :collapsed true}}
+      {:folder {:name "Plot settings" :settings {:order 2}}
        :schema (enc/nested-merge plot-settings-schema
                  {:bins {:min 1 :step 1}
                   :nth-perc {:min 0 :max 100 :step 1}})

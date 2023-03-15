@@ -35,8 +35,8 @@
 ;; building the series of bets presented to the agent, and then (2) making
 ;; decisions for the agent. This would be pretty robust.
 (ns com.mjdowney.kelly-noise
-  (:require [com.mjdowney.kelly.plotly :as plotly]
-            [com.mjdowney.kelly.leva :refer [leva-sync]]
+  (:require [com.mjdowney.kelly.leva :refer [leva-sync]]
+            [com.mjdowney.kelly.plotly :as plotly]
             [goog.functions :as gfn]
             [leva.core :as leva]
             ["seedrandom" :as seedrandom]
@@ -69,11 +69,30 @@
      :bets       100
      :bet-size   0.25}))
 
-(defonce view
+(defonce plot-settings
   (r/atom
-    {:width      800
-     :height     500
-     :y-axis-log true}))
+    {:log-axis   true
+     :bins       100
+     :cumulative false
+     :width      800
+     :height     500}))
+
+(defonce view
+  (r/atom {:active "portfolios"}))
+
+(def view->plot-settings
+  {::all            #{:width :height :log-axis}
+   :terminal-values #{:bins :cumulative}})
+
+(def plot-settings-schema
+  (letfn [(render? [k]
+            (or
+              (contains? (::all view->plot-settings) k)
+              (let [active (keyword (:active @view))]
+                (contains? (view->plot-settings active) k))))]
+    (into {}
+      (map (juxt identity (fn [k] {:render (partial render? k)})))
+      (keys @plot-settings))))
 
 (defn territory-controls []
   (let [!territory (leva-sync territory
@@ -95,6 +114,12 @@
   []
   (let [t @territory]
     [:div {:title t}
+     [leva/Controls
+      {:folder {:name "View" :settings {:order -1}}
+       :atom   view
+       :schema {:active {:options {"Portfolios over time" :portfolios
+                                   "Terminal values"      :terminal-values}}}}]
+
      [territory-controls]
 
      [leva/Controls
@@ -105,8 +130,10 @@
                 :bet-size   {:label "Bet size" :min 0 :max 1 :step 0.01}}}]
 
      [leva/Controls
-      {:folder {:name "View" :settings {:order 2 :collapsed true}}
-       :atom   view}]]))
+      {:folder {:name "Plot settings" :settings {:order 2 :collapsed true}}
+       :schema (enc/nested-merge plot-settings-schema
+                 {:bins {:min 1 :step 1}})
+       :atom   plot-settings}]]))
 
 ;;; Simulation code
 
@@ -147,6 +174,35 @@
          :type       :scatter})
       (range portfolios))))
 
+(defn plot [data]
+  (if (= (:active @view) "terminal-values")
+    ;; Plotly histogram with x log scale of the terminal portfolio values
+    (let [{:keys [log-axis cumulative bins width height]} @plot-settings
+          xf (if log-axis #(Math/log %) identity)
+          terminal-values (mapv (comp xf peek :y) data)]
+      [plotly/plotly
+       {:data   [{:x          terminal-values
+                  :nbinsx     bins
+                  :type       :histogram
+                  :cumulative {:enabled cumulative}
+                  :histnorm   :probability
+                  :opacity    0.55
+                  :showlegend true}]
+        :layout {:title  "Terminal Values"
+                 :xaxis  {:title "Log(Return multiple)"}
+                 :yaxis  {:title (if cumulative "Cumulative %" "Frequency")}
+                 :width  width
+                 :height height}}])
+
+    [plotly/plotly
+     {:data   data
+      :layout {:title  "Portfolios"
+               :xaxis  {:title "Bet #"}
+               :yaxis  {:title "Bankroll"
+                        :type  (if (:log-axis @plot-settings) "log" "linear")}
+               :width  (:width @plot-settings)
+               :height (:height @plot-settings)}}]))
+
 ;; TODO: Perhaps re-frame or rendering one portfolio at a time would improve the
 ;;       responsiveness here.
 (defn simulation-plot []
@@ -160,14 +216,7 @@
                     20)]
     (fn []
       (recompute @simulation @territory)
-      [plotly/plotly
-       {:data   @data
-        :layout {:title  "Portfolios"
-                 :xaxis  {:title "Bet #"}
-                 :yaxis  {:title "Bankroll"
-                          :type  (if (:y-axis-log @view) "log" "linear")}
-                 :width  (:width @view)
-                 :height (:height @view)}}])))
+      [plot @data])))
 
 (defn app []
   [:div

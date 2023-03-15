@@ -46,12 +46,22 @@
 
 ;;; Controls for the simulation
 
+(defn recompute-ev [x k v]
+  (let [{:keys [p-win win-frac loss-frac] :as x} (assoc x k v)]
+    (assoc x :ev (+ (* p-win win-frac) (* (- 1 p-win) (- 1 loss-frac))))))
+
+(defn recompute-win-frac [x k v]
+  (let [{:keys [p-win ev loss-frac] :as x} (assoc x k v)]
+    (assoc x :win-frac (/ (- ev (* (- 1 p-win) (- 1 loss-frac))) p-win))))
+
 (defonce territory
   (r/atom
-    {:p-win     0.50
-     :ev        1.1
-     :loss-frac 1.0
-     :win-frac  1.2}))
+    (recompute-ev
+      {:p-win     0.50
+       :ev        1.1
+       :loss-frac 1.0
+       :win-frac  2.2}
+      :win-frac 2.2)))
 
 (defonce simulation
   (r/atom
@@ -64,14 +74,6 @@
     {:width      800
      :height     500
      :y-axis-log true}))
-
-(defn recompute-ev [x k v]
-  (let [{:keys [p-win win-frac loss-frac] :as x} (assoc x k v)]
-    (assoc x :ev (+ (* p-win win-frac) (* (- 1 p-win) (- 1 loss-frac))))))
-
-(defn recompute-win-frac [x k v]
-  (let [{:keys [p-win ev loss-frac] :as x} (assoc x k v)]
-    (assoc x :win-frac (/ (- ev (* (- 1 p-win) (- 1 loss-frac))) p-win))))
 
 (defn territory-controls []
   (let [!territory (leva-sync territory
@@ -108,20 +110,11 @@
 
 ;;; Simulation code
 
-(defn build-bet [{:keys [p-win ev loss-frac]}]
-  (let [p-lose (/ (- 100 (long (* p-win 100))) 100.0)
-        win-frac (/ (- ev (* p-lose loss-frac)) p-win)]
-    {:p-win     p-win
-     :win-frac  (enc/round* :round 4 win-frac)
-     :loss-frac loss-frac
-     :p-lose    p-lose
-     :ev        ev}))
-
 (defn build-bets
   "Build a series of `n` betting opportunities according to the specified
   territory."
   [territory n]
-  (into [] (repeat n (build-bet territory))))
+  (into [] (repeat n territory)))
 
 (defn simulate-portfolio
   "Simulate a portfolio with the given behavior over some series of bets.
@@ -129,12 +122,12 @@
   Returns a sequence of bankroll values for each bet."
   [{:keys [bet-size] :as behavior} bankroll bets random-number-generator]
   (lazy-seq
-    (when-let [{:keys [p-win win-frac loss-frac p-lose]} (first bets)]
+    (when-let [{:keys [p-win win-frac loss-frac]} (first bets)]
       (if (zero? bankroll)
         (repeat (count bets) 0.0)
         (let [stake (* bet-size bankroll)
               outcome (if (< (random-number-generator) p-win)
-                        (+ bankroll (* win-frac stake))
+                        (+ bankroll (* (- win-frac 1) stake))
                         (- bankroll (* loss-frac stake)))]
           (cons outcome
             (simulate-portfolio

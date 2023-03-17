@@ -367,13 +367,15 @@
                 :showlegend false
                 :type       :scatter}]
       :layout {:title  "Optimization"
-               :xaxis  {:title optimize}
+               :xaxis  {:title optimize :range [0 1]}
                :yaxis  {:title target
                         :type  (if (:log-axis @plot-settings)
                                  "log"
                                  "linear")}
                :width  (:width @plot-settings)
                :height (:height @plot-settings)}}]))
+
+
 
 (comment
   (compute-optimizations)

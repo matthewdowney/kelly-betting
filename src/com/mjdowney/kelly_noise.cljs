@@ -421,43 +421,84 @@
       (recompute @simulation @territory (:nth-perc @plot-settings))
       [plot @data])))
 
-(defn optimization-plot-3d []
-  (let [{:keys [x y]} @optimization-state
-        expanded (for [ z (range 0 101)
-                       [idx x] (map-indexed vector x)]
-                   [x (/ z 100.0) (* (/ z 100.0) (nth y idx))])
-        {:keys [target optimize]} @view]
+;;; ===========================================================================
+;;; WIP 3D optimization plot
+;;; ===========================================================================
+
+(defonce o3d (r/atom {:x [] :y [] :z []}))
+
+(defn o3d-reward [{:keys [portfolios]} nth-perc]
+  (percentile
+    (vec (sort (map (comp peek :y) portfolios)))
+    nth-perc))
+
+(defn o3d-data
+  ([]
+   (o3d-data (get @plot-settings :nth-perc)))
+  ([nth-perc]
+   (let [s @simulation
+         t @territory]
+     (->> (range 0 101 5)
+          (map
+            (fn [bet-size]
+              (mapv
+                (fn [loss-percent]
+                  (Math/log
+                    (o3d-reward
+                      (run-simulation
+                        {:simulation (assoc s :bet-size (/ bet-size 100.0))
+                         :territory (assoc t :loss-frac (/ loss-percent 100.0))})
+                      nth-perc)))
+                (range 0 101 5))))))))
+
+(defn compute-o3d []
+  (reset! o3d {:x [] :y [] :z []})
+  (incr-into-atom o3d 1
+    (fn
+      ([state z] (-> state (update :z conj z)))
+      ([state] state))
+    (o3d-data)))
+
+(comment
+  (compute-o3d)
+
+  @o3d
+  (swap! o3d update :foo inc)
+  )
+
+(defonce z (o3d-data))
+
+(defn plot-o3d []
+  (let [#_#_{:keys [x y z]} @o3d
+        {:keys [target optimize]} @view
+        #_#_z (map #(Math/log %) (o3d-data))]
     [plotly/plotly
-     {:data   [{:x (mapv first expanded)
-                :y (mapv second expanded)
-                :z (mapv peek expanded)
+     {:data   [{:x (vec (range 0 101 5))
+                :y (vec (range 0 101 5))
+                :z z
                 :opacity    1
                 :showlegend false
-                :type       :scatter3d
-                :mode       :lines
-                :line      {:width 3 :colorscale "Viridis" :color (mapv second expanded)}}]
+                :type       :surface
+                #_#_:mode       :lines
+                #_#_:line      {:width 3 :colorscale "Viridis" :color z}}]
       :layout {:title  "Optimization"
                :scene {:xaxis  {:title optimize
-                                :range [0 1]}
+                                #_#_:range [0 1]}
+                       :yaxis  {:title "Loss %"}
                        :zaxis  {:title target
-                                :type  (if (:log-axis @plot-settings)
-                                         "log"
-                                         "linear")}}
-               :xaxis  {:title optimize
-                        :range [0 1]}
-               :yaxis  {:title "Noise"}
-               :zaxis  {:title target
-                        :type  (if (:log-axis @plot-settings)
-                                 "log"
-                                 "linear")}
+                                #_#_:type  (if (:log-axis @plot-settings) "log" "linear")}}
                :width  (:width @plot-settings)
                :height (:height @plot-settings)}}]))
+
+;;; ===========================================================================
+;;; End WIP 3D optimization plot
+;;; ===========================================================================
 
 (defn app []
   [:div
    [controls]
-   [plot-recompute-wrapper]
-   [optimization-plot-3d]])
+   #_[plot-recompute-wrapper]
+   [plot-o3d]])
 
 ;;; Lifecycle / entry point
 

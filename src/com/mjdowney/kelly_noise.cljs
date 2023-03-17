@@ -375,8 +375,6 @@
                :width  (:width @plot-settings)
                :height (:height @plot-settings)}}]))
 
-
-
 (comment
   (compute-optimizations)
   (def od (optimization-data @view))
@@ -418,16 +416,48 @@
                           (incr-into-atom data 10
                             (partial conj-nth-perc perc)
                             (compute-nth-perc data-state perc)))))
-                        #_(compute-nth-perc data perc 0 s)
                     20)]
     (fn []
       (recompute @simulation @territory (:nth-perc @plot-settings))
       [plot @data])))
 
+(defn optimization-plot-3d []
+  (let [{:keys [x y]} @optimization-state
+        expanded (for [ z (range 0 101)
+                       [idx x] (map-indexed vector x)]
+                   [x (/ z 100.0) (* (/ z 100.0) (nth y idx))])
+        {:keys [target optimize]} @view]
+    [plotly/plotly
+     {:data   [{:x (mapv first expanded)
+                :y (mapv second expanded)
+                :z (mapv peek expanded)
+                :opacity    1
+                :showlegend false
+                :type       :scatter3d
+                :mode       :lines
+                :line      {:width 3 :colorscale "Viridis" :color (mapv second expanded)}}]
+      :layout {:title  "Optimization"
+               :scene {:xaxis  {:title optimize
+                                :range [0 1]}
+                       :zaxis  {:title target
+                                :type  (if (:log-axis @plot-settings)
+                                         "log"
+                                         "linear")}}
+               :xaxis  {:title optimize
+                        :range [0 1]}
+               :yaxis  {:title "Noise"}
+               :zaxis  {:title target
+                        :type  (if (:log-axis @plot-settings)
+                                 "log"
+                                 "linear")}
+               :width  (:width @plot-settings)
+               :height (:height @plot-settings)}}]))
+
 (defn app []
   [:div
    [controls]
-   [plot-recompute-wrapper]])
+   [plot-recompute-wrapper]
+   [optimization-plot-3d]])
 
 ;;; Lifecycle / entry point
 

@@ -1,3 +1,6 @@
+;; This NS contains the initial Kelly bet simulator with a bunch of controls,
+;; and ideas of things to simulate.
+
 ;; Things to simulate:
 ;;  - Territory
 ;;   - Probability per bet
@@ -49,7 +52,7 @@
 ;; UI. I wonder if there could be presets + user-provided functions for (1)
 ;; building the series of bets presented to the agent, and then (2) making
 ;; decisions for the agent. This would be pretty robust.
-(ns com.mjdowney.kelly-noise
+(ns com.mjdowney.kelly.full-simulator
   (:require [com.mjdowney.kelly.leva :refer [leva-sync]]
             [com.mjdowney.kelly.plotly :as plotly]
             [goog.functions :as gfn]

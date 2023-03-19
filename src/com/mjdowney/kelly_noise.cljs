@@ -1,9 +1,11 @@
 (ns com.mjdowney.kelly-noise
-  (:require [com.mjdowney.kelly.plotly :as plotly]
-            [com.mjdowney.kelly.leva :as leva]
+  (:require [com.mjdowney.kelly.leva :as leva]
+            [com.mjdowney.kelly.plotly :as plotly]
+            [goog.array :as garray]
             [leva.core :as l]
             [reagent.core :as r]
             [reagent.dom :as rdom]
+            ["seedrandom" :as seedrandom]
             [taoensso.encore :as enc]))
 
 ;;; Simulation controls
@@ -29,6 +31,9 @@
     :hint     (str "Multiply wagered amount by Frac(Win), or lose Frac(Lose), "
                    "according to the outcome.")
     :joystick false}
+
+   ;; TODO: Consider getting rid of these two, and moving noise up here, to make
+   ;;       the spacing nicer. Can display these computed values elsewhere.
    :odds
    {:label    "Odds"
     :hint     "This is `b` in the Kelly formula."
@@ -107,29 +112,85 @@
       :atom   behavior-controls
       :schema behavior-controls-schema}]]])
 
-;;; Placeholder stuff
+;;; Simulation
+;;; TODO: Noise
 
-(defn rand-between [a b] (+ a (* (- b a) (rand))))
+(defn simulate*
+  [p-win-lose frac-win-lose bet-size n-portfolios n-bets rng-seed]
+  (let [[pw _pl] p-win-lose
+        [fw fl] frac-win-lose
+        fw-minus-1 (- fw 1)
+        rng (seedrandom rng-seed)]
+    (letfn [(make-bet [portfolio all-portfolios-array]
+              (let [bankroll (peek portfolio)
+                    wager (* bankroll bet-size)
+                    val (if (<= (rng) pw)
+                          (+ bankroll (* wager fw-minus-1))
+                          (- bankroll (* wager fl)))]
+                (.push all-portfolios-array val)
+                (conj portfolio val)))]
+      (loop [n-bets n-bets
+             portfolios (vec (repeat n-portfolios [1.0]))
+             sorted-portfolios [(vec (repeat n-portfolios 1.0))]]
+        (if (pos? n-bets)
+          (let [apa (make-array 0)
+                portfolios (into [] (map #(make-bet % apa) portfolios))]
+            (recur
+              (dec n-bets)
+              portfolios
+              (conj sorted-portfolios (vec (doto apa garray/sort)))))
+          (conj portfolios sorted-portfolios))))))
 
-(defn random-walk
-  ([] (random-walk 50))
-  ([n]
-   (lazy-seq
-     (cons n
-       (random-walk
-         (Math/round
-           (* n (rand-between 0.9 1.1))))))))
+(def msimulate* (enc/memoize-last simulate*))
+
+(defn simulate
+  "Simulate a series of bets.
+
+  Returns a series of each portfolio's bankroll over time:
+
+    [[bankroll(bet = 0), bankroll(bet = 1), ..., bankroll(bet = n)]
+     ...]
+
+  where the last element in the series is a vector of the sorted bankrolls at
+  each bet, to facilitate calculation of the nth percentile portfolio."
+  [{:keys [p-win-lose frac-win-lose]}
+   {:keys [bet-strategy bet-size noise nth-percentile]}
+   n-portfolios n-bets rng-seed]
+  (msimulate* p-win-lose frac-win-lose bet-size n-portfolios n-bets rng-seed))
+
+(defn vbutlast "`butlast` for vectors" [v] (subvec v 0 (dec (count v))))
+
+(defn portfolio-simulation-data []
+  (let [rng-seed 1
+        n-portfolios 100
+        n-bets 100
+        bh @behavior-controls
+        results (simulate @wager-controls bh n-portfolios n-bets rng-seed)
+        perc (:nth-percentile bh)
+        nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ perc 100))))]
+    (cons
+      {:y           (map #(nth % nth-percentile-idx) (peek results))
+       :opacity     1
+       :showledgend true
+       :perc        perc
+       :line        {:width 3}
+       :name        (str "p" perc)}
+      (map
+        (fn [portfolio]
+          {:y          portfolio
+           :opacity    0.15
+           :showlegend false
+           :type       :scatter})
+        (vbutlast results)))))
 
 (defn app []
   [:div
    [plotly/plotly
-    {:data   [{:x      (range 100)
-               :y      (take 100 (random-walk 50))
-               :type   "scatter"
-               :mode   "lines+markers"
-               :marker {:color "red"}}]
-     :layout {:title "A Plot"
-              :width  (- #p (enc/clamp 550 1000 #p (.-innerWidth js/window)) 50)}}]
+    {:data (portfolio-simulation-data)
+     :layout {:title "Simulated portfolios"
+              :yaxis {:title "Return multiple" :type "log"}
+              :xaxis {:title "Bet #"}
+              :width  (- (enc/clamp 550 1000 (.-innerWidth js/window)) 50)}}]
    [:div.container.leva {:style {:line-height 2.45}}
     [leva-controls]]])
 

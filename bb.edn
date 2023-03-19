@@ -3,4 +3,4 @@
        :requires ([babashka.fs :as fs])
        :task     (do
                    (fs/delete-tree "public/js")
-                   (shell "npx shadow-cljs watch :app"))}}}
+                   (shell "npx shadow-cljs watch :site"))}}}

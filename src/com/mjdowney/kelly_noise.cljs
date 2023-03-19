@@ -77,11 +77,25 @@
     :step  1}
    :optimize (l/button #(js/alert "optimize") {:label "Optimize"})})
 
+(def leva-theme
+  {:sizes   {:titleBarHeight "30px"}
+   :shadows {:level1 "none" :level2 "none"}
+   :colors  {:highlight1 "#fefefe"
+             :highlight2 "#b7bccb"
+             :accent2    "steelblue"
+             ; bg color of the root panel (main title bar), rows (main panel
+             ; color), and inputs
+             :elevation1 "#0a2f52"
+             :elevation2 "#ffffff0b"
+             :elevation3 "#292d39ff"}})
+
 (defn leva-controls []
-  [leva/SubPanel {:fill           true
-                  :flat           false
-                  :titleBar       {:drag false :filter false :title "Controls"}
-                  :hideCopyButton true}
+  [leva/SubPanel
+   {:fill           true
+    :flat           false
+    :titleBar       {:drag false :filter false :title "Controls"}
+    :hideCopyButton true
+    :theme          leva-theme}
    [:<>
     [leva/Controls
      {:folder    {:name "Wager characteristics"}
@@ -114,8 +128,10 @@
                :type   "scatter"
                :mode   "lines+markers"
                :marker {:color "red"}}]
-     :layout {:title "A Plot"}}]
-   [:div.container [leva-controls]]])
+     :layout {:title "A Plot"
+              :width  (- #p (enc/clamp 550 1000 #p (.-innerWidth js/window)) 50)}}]
+   [:div.container.leva {:style {:line-height 2.45}}
+    [leva-controls]]])
 
 ;;; Lifecycle / entry point
 

@@ -15,8 +15,7 @@
 ;;    ***
 ;;  - Comparisons? So there's a button to take a snapshot to save a comparison
 ;;    ***
-;;
-;;  - 3D plot of ... variance, noise, and kelly fraction?
+;; ;;  - 3D plot of ... variance, noise, and kelly fraction?
 ;;
 ;;  - Non-random plot: all the wins then all the losses, the reverse, then
 ;;    interspersed.

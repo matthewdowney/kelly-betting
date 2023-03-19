@@ -12,12 +12,14 @@
                            :http-root "public"
                            :http-port 8020}}
 
-          #_#_:site {:target :browser
-                 :output-dir "../matthewdowney.github.io/static/js/ftx-simulator"
-                 :asset-path "/static/js/ftx-simulator"
-                 :modules {:main {:entries [simulator.core]}}
+          :site {:target :browser
+                 :output-dir "../matthewdowney.github.io/static/js/kelly-noise"
+                 :asset-path "/static/js/kelly-noise"
+                 :modules {:main {:entries [com.mjdowney.kelly-noise]}}
                  :devtools {:preloads [hashp.core]
-                            :before-load simulator.core/stop
-                            :after-load simulator.core/start
+                            :repl-init-ns com.mjdowney.kelly-noise
+                            :repl-pprint true
+                            :before-load com.mjdowney.kelly-noise/stop
+                            :after-load com.mjdowney.kelly-noise/start
                             :http-root "public"
                             :http-port 8020}}}}

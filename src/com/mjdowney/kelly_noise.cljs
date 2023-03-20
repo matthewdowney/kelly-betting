@@ -2,6 +2,7 @@
   (:require [com.mjdowney.kelly.leva :as leva]
             [com.mjdowney.kelly.plotly :as plotly]
             [goog.array :as garray]
+            [goog.functions :as gfn]
             [leva.core :as l]
             [reagent.core :as r]
             [reagent.dom :as rdom]
@@ -183,16 +184,67 @@
            :type       :scatter})
         (vbutlast results)))))
 
+(defn optimize
+  [{:keys [p-win-lose frac-win-lose]}
+   {:keys [bet-strategy bet-size noise nth-percentile]}
+   n-portfolios n-bets rng-seed]
+  (let [nth-percentile-idx (int
+                             (Math/floor
+                               (* (dec n-portfolios)
+                                  (/ nth-percentile 100))))]
+    (loop [x []
+           y []
+           n 0]
+      (if (<= n 100)
+        (let [bet-size (/ n 100.0)
+              results (peek
+                        (peek
+                          (simulate* p-win-lose frac-win-lose
+                            bet-size n-portfolios n-bets rng-seed)))]
+          (recur
+            (conj x bet-size)
+            (conj y (nth results nth-percentile-idx))
+            (inc n)))
+        {:x x :y y}))))
+
+(defn bet-size-optimization-data []
+  (let [rng-seed 1
+        n-portfolios 100
+        n-bets 100
+        bh @behavior-controls]
+    (optimize @wager-controls bh n-portfolios n-bets rng-seed)))
+
+(defonce window
+  (let [a (r/atom (.-innerWidth js/window))]
+    (.addEventListener js/window "resize"
+      (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
+    a))
+
 (defn app []
-  [:div
-   [plotly/plotly
-    {:data (portfolio-simulation-data)
-     :layout {:title "Simulated portfolios"
-              :yaxis {:title "Return multiple" :type "log"}
-              :xaxis {:title "Bet #"}
-              :width  (- (enc/clamp 550 1000 (.-innerWidth js/window)) 50)}}]
-   [:div.container.leva {:style {:line-height 2.45}}
-    [leva-controls]]])
+  (let [large-window? (> @window 900)
+        plot-width (if large-window?
+                     (- (enc/clamp 400 1000 (/ @window 2)) 20)
+                     (- @window 50))]
+    [:div
+     [:div {:style {:display (if large-window? :flex :grid)
+                    :justify-content :center}}
+      [plotly/plotly
+       {:data (portfolio-simulation-data)
+        :layout {:title "Simulated portfolios"
+                 :yaxis {:title "Return multiple" :type "log"}
+                 :xaxis {:title "Bet #"}
+                 :legend {:x 1 :y 1 :xanchor :right}
+                 :margin {:r 10}
+                 :width  plot-width}}]
+      [plotly/plotly
+       {:data [(bet-size-optimization-data)]
+        :layout {:title "Simulated portfolios"
+                 :yaxis {:title "Return multiple" #_#_:type "log"}
+                 :xaxis {:title "Bet size"}
+                 :margin {:r 30}
+                 :width  plot-width}}]]
+     [:div.container.leva {:style {:line-height 2.45}}
+      [leva-controls]]]))
 
 ;;; Lifecycle / entry point
 

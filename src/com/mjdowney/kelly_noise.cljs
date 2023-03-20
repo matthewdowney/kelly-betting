@@ -185,62 +185,72 @@
         (vbutlast results)))))
 
 (defn optimize
-  [{:keys [p-win-lose frac-win-lose]}
-   {:keys [bet-strategy bet-size noise nth-percentile]}
-   n-portfolios n-bets rng-seed]
+  [{:keys [p-win-lose frac-win-lose]} nth-percentile n-portfolios n-bets rng-seed]
   (let [nth-percentile-idx (int
                              (Math/floor
                                (* (dec n-portfolios)
                                   (/ nth-percentile 100))))]
     (loop [x []
            y []
+           best [0 1]
            n 0]
       (if (<= n 100)
         (let [bet-size (/ n 100.0)
               results (peek
                         (peek
                           (simulate* p-win-lose frac-win-lose
-                            bet-size n-portfolios n-bets rng-seed)))]
+                            bet-size n-portfolios n-bets rng-seed)))
+              return (nth results nth-percentile-idx)]
           (recur
             (conj x bet-size)
-            (conj y (nth results nth-percentile-idx))
+            (conj y return)
+            (if (> return (peek best))
+              [bet-size return]
+              best)
             (inc n)))
-        {:x x :y y}))))
+        {:x x :y y :best best}))))
 
 (defn bet-size-optimization-data []
-  (let [rng-seed 1
-        n-portfolios 100
-        n-bets 100
-        bh @behavior-controls]
-    (optimize @wager-controls bh n-portfolios n-bets rng-seed)))
+  (let [nth-perc (r/cursor behavior-controls [:nth-percentile])]
+    (fn []
+      (let [rng-seed 1
+            n-portfolios 100
+            n-bets 100]
+        (js/console.log "optimizing")
+        (optimize @wager-controls @nth-perc n-portfolios n-bets rng-seed)))))
+
+(defn optimization-plot [{:keys [width]}]
+  (let [bsod (r/track (bet-size-optimization-data))]
+    (fn [{:keys [width]}]
+      (let [{:keys [bet-size nth-percentile]} @behavior-controls
+            bsod @bsod
+            idx (* bet-size 100)]
+        [plotly/plotly
+         {:data [(assoc bsod
+                   :name (str "p" nth-percentile " return")
+                   :showlegend false)
+                 {:x [(nth (:x bsod) idx)]
+                  :y [(nth (:y bsod) idx)]
+                  :type :scatter
+                  :mode :markers
+                  :marker {:color "red" :size 8}
+                  :name " "
+                  :showlegend false}]
+          :layout {:title (str "p" nth-percentile " return multiple by bet size")
+                   :yaxis {#_#_:type "log"}
+                   :xaxis {:title "Bet size"}
+                   :margin {:r 30}
+                   :width  width
+                   :annotations [{:x (get-in bsod [:best 0])
+                                  :y (get-in bsod [:best 1])
+                                  :text (str "f* = " (get-in bsod [:best 0]))
+                                  :showarrow true}]}}]))))
 
 (defonce window
   (let [a (r/atom (.-innerWidth js/window))]
     (.addEventListener js/window "resize"
       (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
     a))
-
-(defn optimization-plot [{:keys [width]}]
-  (let [{:keys [bet-size nth-percentile]} @behavior-controls
-        bsod (bet-size-optimization-data)
-        idx (* bet-size 100)]
-    [plotly/plotly
-     {:data [(assoc bsod
-               :name (str "p" nth-percentile " return")
-               :showlegend false)
-             {:x [(nth (:x bsod) idx)]
-              :y [(nth (:y bsod) idx)]
-              :type :scatter
-              :mode :markers
-              :marker {:color "red" :size 8}
-              :name " "
-              :showlegend false}]
-      :layout {:title (str "p" nth-percentile " return multiple by bet size")
-               :yaxis {#_#_:type "log"}
-               :xaxis {:title "Bet size"}
-               :margin {:r 30}
-               :width  width}}]))
-
 
 (defn app []
   (let [large-window? (> @window 900)

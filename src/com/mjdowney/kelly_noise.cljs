@@ -35,17 +35,17 @@
 
    ;; TODO: Consider getting rid of these two, and moving noise up here, to make
    ;;       the spacing nicer. Can display these computed values elsewhere.
-   :odds
+   #_#_:odds
    {:label    "Odds"
     :hint     "This is `b` in the Kelly formula."
     :value    1.0
     :disabled true}
-   :ev
+   #_#_:ev
    {:label    "Expected value"
     :value    1.1
     :disabled true}})
 
-(defn recompute-odds-and-ev [{[pw pl] :p-win-lose [fw fl] :frac-win-lose :as x}]
+#_(defn recompute-odds-and-ev [{[pw pl] :p-win-lose [fw fl] :frac-win-lose :as x}]
   (assoc x
     :odds (enc/round2 (/ (- fw 1) fl))
     :ev (+ (* pw fw) (* pl (- 1 fl)))))
@@ -107,7 +107,7 @@
      {:folder    {:name "Wager characteristics"}
       :atom      wager-controls
       :schema    wager-control-schema
-      :set-state recompute-odds-and-ev}]
+      #_#_:set-state recompute-odds-and-ev}]
     [leva/Controls
      {:folder {:name "Behavior"}
       :atom   behavior-controls
@@ -170,7 +170,7 @@
         perc (:nth-percentile bh)
         nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ perc 100))))]
     (cons
-      {:y           (map #(nth % nth-percentile-idx) (peek results))
+      {:y           (mapv #(nth % nth-percentile-idx) (peek results))
        :opacity     1
        :showledgend true
        :perc        perc
@@ -220,6 +220,28 @@
       (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
     a))
 
+(defn optimization-plot [{:keys [width]}]
+  (let [{:keys [bet-size nth-percentile]} @behavior-controls
+        bsod (bet-size-optimization-data)
+        idx (* bet-size 100)]
+    [plotly/plotly
+     {:data [(assoc bsod
+               :name (str "p" nth-percentile " return")
+               :showlegend false)
+             {:x [(nth (:x bsod) idx)]
+              :y [(nth (:y bsod) idx)]
+              :type :scatter
+              :mode :markers
+              :marker {:color "red" :size 8}
+              :name " "
+              :showlegend false}]
+      :layout {:title (str "p" nth-percentile " return multiple by bet size")
+               :yaxis {#_#_:type "log"}
+               :xaxis {:title "Bet size"}
+               :margin {:r 30}
+               :width  width}}]))
+
+
 (defn app []
   (let [large-window? (> @window 900)
         plot-width (if large-window?
@@ -236,13 +258,7 @@
                  :legend {:x 1 :y 1 :xanchor :right}
                  :margin {:r 10}
                  :width  plot-width}}]
-      [plotly/plotly
-       {:data [(bet-size-optimization-data)]
-        :layout {:title "Simulated portfolios"
-                 :yaxis {:title "Return multiple" #_#_:type "log"}
-                 :xaxis {:title "Bet size"}
-                 :margin {:r 30}
-                 :width  plot-width}}]]
+      [optimization-plot {:width plot-width}]]
      [:div.container.leva {:style {:line-height 2.45}}
       [leva-controls]]]))
 

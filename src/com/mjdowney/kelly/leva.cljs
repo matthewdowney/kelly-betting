@@ -53,7 +53,7 @@
 (defn Controls* [opts]
   (let [[watch-id] (react/useState (str (random-uuid)))
         !state     (:atom opts)
-        set-state  (get opts :set-state (constantly identity))
+        set-state  (get opts :set-state identity)
         initial    (if !state (.-state !state) {})
         ks         (keys initial)
         opts       (update opts :store #(or % (leva-js/useStoreContext)))

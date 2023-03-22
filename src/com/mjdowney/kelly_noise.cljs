@@ -1,6 +1,8 @@
 (ns com.mjdowney.kelly-noise
-  (:require [com.mjdowney.kelly.leva :as leva]
+  (:require [com.mjdowney.kelly.incremental :refer [incr-into-atom]]
+            [com.mjdowney.kelly.leva :as leva]
             [com.mjdowney.kelly.plotly :as plotly]
+            [com.mjdowney.kelly.simulation :as sim]
             [goog.array :as garray]
             [goog.functions :as gfn]
             [reagent.core :as r]
@@ -10,7 +12,11 @@
 
 ;;; Simulation controls
 
-(defonce wager-controls (r/atom {:p-win-lose [0.5 0.5] :frac-win-lose [1.6 0.4]}))
+(defonce wager-controls
+  (r/atom
+    {:p-win-lose [0.5 0.5]
+     :frac-win-lose [1.6 0.4]
+     :noise 0}))
 
 (def wager-control-schema
   {:p-win-lose
@@ -27,14 +33,18 @@
    {:label    "Frac(Win, Lose)"
     :hint     (str "Multiply wagered amount by Frac(Win), or lose Frac(Lose), "
                    "according to the outcome.")
-    :joystick false}})
+    :joystick false}
+   :noise
+   {:label "Noise %"
+    :hint  "A % value σ to compute P(win) ~ Gaussian(P(win), σ) for each bet."
+    :min   0
+    :max   100
+    :step  1}})
 
 (defonce behavior-controls
   (r/atom
     {:bet-strategy   "% of bankroll"
-     :bet-size       0.25
-     :noise          0
-     :nth-percentile 50}))
+     :bet-size       25}))
 
 (def behavior-controls-schema
   {:bet-strategy
@@ -43,18 +53,16 @@
                   "the theoretical Kelly-optimal bet?")
     :options ["% of bankroll" "% of Kelly bet"]}
    :bet-size
-   {:label "Bet size"
-    :hint  "Fraction to bet on each wager."
+   {:label "Bet size %"
+    :hint  "Amount to bet on each wager, either as a % of bank roll, or of f*."
     :min   0
-    :max   1
-    :step  0.01}
-   :noise
-   {:label "Noise"
-    :hint  "A value σ to compute P(win) ~ Gaussian(P(win), σ) for each bet."
-    :min   0
-    :max   1
-    :step  0.01}
-   :nth-percentile
+    :max   100
+    :step  1}})
+
+(defonce view-controls (r/atom {:nth-percentile 50}))
+
+(def view-controls-schema
+  {:nth-percentile
    {:label "Nth percentile"
     :hint  "Optimize for the Nth percentile simulated portfolio return."
     :min   0
@@ -88,85 +96,40 @@
     [leva/Controls
      {:folder {:name "Behavior"}
       :atom   behavior-controls
-      :schema behavior-controls-schema}]]])
+      :schema behavior-controls-schema}]
+    [leva/Controls
+     {:folder {:name "View"}
+      :atom   view-controls
+      :schema view-controls-schema}]]])
 
 ;;; Simulation
 
-(defn rand-norm [rng mean stdev] ; box muller transform
-  (let [u1 (rng)
-        u2 (rng)
-        r (Math/sqrt (* -2 (Math/log u1)))
-        theta (* 2 Math/PI u2)]
-    (+ mean (* stdev r (Math/cos theta)))))
-
-(defn simulate*
-  [{:keys [p-win-lose noise frac-win-lose bet-size bet-strategy n-portfolios n-bets rng-seed]}]
-  (let [[pw* _pl] p-win-lose
-        [fw fl] frac-win-lose
-        bet-size (if (= bet-strategy "% of bankroll")
-                   bet-size
-                   (let [kelly-bet (- (/ pw* fl) (/ (- 1 pw*) (- fw 1)))]
-                     (* kelly-bet bet-size)))
-        fw-minus-1 (- fw 1)
-        rng (seedrandom rng-seed)
-        calc-pw (if (pos? noise)
-                  (fn [] (rand-norm rng pw* noise))
-                  (constantly pw*))]
-    (letfn [(make-bet [portfolio all-portfolios-array]
-              (let [bankroll (peek portfolio)
-                    wager (* bankroll (max bet-size 0))
-                    pw (calc-pw)
-                    val (if (<= (rng) pw)
-                          (+ bankroll (* wager fw-minus-1))
-                          (- bankroll (* wager fl)))]
-                (.push all-portfolios-array val)
-                (conj portfolio val)))]
-      (loop [n-bets n-bets
-             portfolios (vec (repeat n-portfolios [1.0]))
-             sorted-portfolios [(vec (repeat n-portfolios 1.0))]]
-        (if (pos? n-bets)
-          (let [apa (make-array 0)
-                portfolios (into [] (map #(make-bet % apa) portfolios))]
-            (recur
-              (dec n-bets)
-              portfolios
-              (conj sorted-portfolios (vec (doto apa garray/sort)))))
-          (conj portfolios sorted-portfolios))))))
-
-(def msimulate* (enc/memoize-last simulate*))
-
-(defn simulate
-  "Simulate a series of bets.
-
-  Returns a series of each portfolio's bankroll over time:
-
-    [[bankroll(bet = 0), bankroll(bet = 1), ..., bankroll(bet = n)]
-     ...]
-
-  where the last element in the series is a vector of the sorted bankrolls at
-  each bet, to facilitate calculation of the nth percentile portfolio."
-  [{:keys [p-win-lose frac-win-lose]}
-   {:keys [bet-strategy bet-size noise nth-percentile]}
-   n-portfolios n-bets rng-seed]
-  (msimulate*
-    {:p-win-lose p-win-lose
-     :noise noise
-     :frac-win-lose frac-win-lose
-     :bet-size bet-size
-     :bet-strategy bet-strategy
-     :n-portfolios n-portfolios
-     :n-bets n-bets
-     :rng-seed rng-seed}))
-
+(def n-portfolios 100)
+(def simulate (enc/memoize-last sim/simulate))
 (defn vbutlast "`butlast` for vectors" [v] (subvec v 0 (dec (count v))))
 
-(defn portfolio-simulation-data []
-  (let [rng-seed 1
-        n-portfolios 100
-        n-bets 100
-        bh @behavior-controls
-        results (simulate @wager-controls bh n-portfolios n-bets rng-seed)
-        perc (:nth-percentile bh)
+(defn kelly-bet [{:keys [p-win-lose frac-win-lose]}]
+  (let [[pw* _pl] p-win-lose
+        [fw fl] frac-win-lose]
+    (- (/ pw* fl) (/ (- 1 pw*) (- fw 1)))))
+
+(defn run-portfolio-simulation [{strat :bet-strategy bet :bet-size} wc]
+  (let [pw (first (:p-win-lose wc))
+        bet (/ bet 100.0)
+        noise (/ (:noise wc) 100.0)]
+    (simulate
+      {:rng-seed 1
+       :p-winf   (if (pos? noise) (sim/random-pwin-fn pw noise) (constantly pw))
+       :odds     (:frac-win-lose wc)
+       :bet-size (if (= strat "% of bankroll") bet (* bet (kelly-bet wc)))
+       :nps      n-portfolios
+       :nbs      100})))
+
+(defn portfolio-simulation-plot-data []
+  (let [bh @behavior-controls
+        wc @wager-controls
+        results (run-portfolio-simulation bh wc)
+        perc (:nth-percentile @view-controls)
         nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ perc 100))))]
     (concat
       (map
@@ -184,59 +147,41 @@
         :name        (str "p" perc)}])))
 
 (defn bet-size-optimization-data
-  [{:keys [p-win-lose frac-win-lose]} noise bet-strategy nth-percentile n-portfolios n-bets rng-seed]
+  [{:keys [p-win-lose frac-win-lose noise] :as wc} strat nth-percentile n-portfolios n-bets rng-seed]
   (let [nth-percentile-idx (int
                              (Math/floor
                                (* (dec n-portfolios)
                                   (/ nth-percentile 100))))
-        limit (if (= bet-strategy "% of bankroll") 100 150)]
+        pw (first p-win-lose)
+        pwf (if (pos? noise) (sim/random-pwin-fn pw (/ noise 100.0)) (constantly pw))
+        kb (kelly-bet wc)
+        limit (if (= strat "% of bankroll") 100 (min (* (/ 1 kb) 100) 150))
+        bet-size-denom (if (= strat "% of bankroll") 1.0 kb)]
     (letfn [(optimize* [best n]
               (lazy-seq
-              (when (<= n limit)
-                (let [bet-size (/ n 100.0)
-                      results (peek
-                                (peek
-                                  (simulate*
-                                    {:p-win-lose p-win-lose
-                                     :noise noise
-                                     :frac-win-lose frac-win-lose
-                                     :bet-size bet-size
-                                     :bet-strategy bet-strategy
-                                     :n-portfolios n-portfolios
-                                     :n-bets n-bets
-                                     :rng-seed rng-seed})))
-                      return (nth results nth-percentile-idx)
-                      best (if (> return (peek best)) [bet-size return] best)]
-                  (cons
-                    {:x bet-size :y return :best best}
-                    (optimize* best (inc n)))))))]
+                (when (<= n limit)
+                  (let [bet-size (/ n 100.0)
+                        results (peek
+                                  (peek
+                                    (simulate
+                                      {:rng-seed rng-seed
+                                       :p-winf pwf
+                                       :odds frac-win-lose
+                                       :bet-size (* bet-size bet-size-denom)
+                                       :nps n-portfolios
+                                       :nbs n-bets
+                                       :sorted? false})))
+                        results (doto (into-array results) garray/sort)
+                        return (aget results nth-percentile-idx)
+                        best (if (> return (peek best)) [bet-size return] best)]
+                    (cons
+                      {:x bet-size :y return :best best}
+                      (optimize* best (inc n)))))))]
       (cons {:x 0 :y 1 :best [0 1]} (optimize* [0 1] 1)))))
-
-(defn incr-into-atom
-  "Incrementally reduce the `from-seq` into the `to-atom` state, in chunks of
-  `chunk-size`, yielding with js/setTimeout between chunks."
-  ([to-atom chunk-size rf from-seq]
-   (let [proc-id (gensym)]
-     (swap! to-atom assoc ::incr-into-atom proc-id)
-     (incr-into-atom to-atom rf chunk-size from-seq proc-id)))
-  ([to-atom chunk-size rf from-seq proc-id]
-   (loop [idx 0
-          from-seq from-seq]
-     (if (< idx chunk-size)
-       (let [state @to-atom]
-         (when (= (::incr-into-atom state) proc-id)
-           (if-let [x (first from-seq)]
-             (do
-               (reset! to-atom (rf state x))
-               (recur (inc idx) (rest from-seq)))
-             (reset! to-atom (rf state)))))
-       (js/setTimeout
-         #(incr-into-atom to-atom rf chunk-size from-seq proc-id)
-         0)))))
 
 (defn bsod-getter []
   (let [bsod (r/atom nil)]
-    (letfn [(recompute [wager-controls noise bet-strategy nth-perc]
+    (letfn [(recompute [wager-controls bet-strategy nth-perc]
               (swap! bsod assoc :x [] :y [] :best nil :complete false)
               (incr-into-atom bsod 10
                 (fn
@@ -246,27 +191,27 @@
                        (update :y conj (:y x))
                        (assoc :best (:best x))))
                   ([state] (assoc state :complete true)))
-                (bet-size-optimization-data wager-controls noise bet-strategy
+                (bet-size-optimization-data wager-controls bet-strategy
                   nth-perc 100 100 1)))]
       (let [recompute (enc/memoize-last recompute)]
-        (fn [wager-controls noise bet-strategy nth-percentile]
-          (recompute wager-controls noise bet-strategy nth-percentile)
+        (fn [wager-controls bet-strategy nth-percentile]
+          (recompute wager-controls bet-strategy nth-percentile)
           @bsod)))))
 
 (defn optimization-plot [{:keys [width]}]
   (let [get-bsod (bsod-getter)
         get-bsodp50 (bsod-getter)]
     (fn [{:keys [width]}]
-      (let [{:keys [bet-size nth-percentile noise bet-strategy]} @behavior-controls
-            bsod (get-bsod @wager-controls noise bet-strategy nth-percentile)
-            bsod1 (when-not (= nth-percentile 50)
-                    (get-bsodp50 @wager-controls noise bet-strategy 50))
-            idx (* bet-size 100)
+      (let [{:keys [bet-size bet-strategy]} @behavior-controls
+            np (:nth-percentile @view-controls)
+            bsod (get-bsod @wager-controls bet-strategy np)
+            bsod1 (when-not (= np 50) (get-bsodp50 @wager-controls bet-strategy 50))
+            idx bet-size
             xmax (if (= bet-strategy "% of bankroll") 1 1.5)]
         [plotly/plotly
          {:data (enc/conj-some
                   [(assoc bsod
-                     :name (str "p" nth-percentile " return")
+                     :name (str "p" np " return")
                      :showlegend true)]
                   (when bsod1
                     (assoc bsod1 :name (str "p50 return") :showlegend true))
@@ -283,7 +228,8 @@
                     {:x [(get-in bsod [:best 0])]
                      :y [(get-in bsod [:best 1])]
                      :type :scatter
-                     :name (str "optimal f* = " (get-in bsod [:best 0]))
+                     :mode :markers
+                     :name (str "optimal = " (get-in bsod [:best 0]))
                      :marker {:color "green" :size 8}
                      :showlegend true}))
           :layout {:title "Return multiple by bet size"
@@ -307,7 +253,7 @@
      [:div {:style {:display (if large-window? :flex :grid)
                     :justify-content :center}}
       [plotly/plotly
-       {:data (portfolio-simulation-data)
+       {:data (portfolio-simulation-plot-data)
         :layout {:title "Simulated portfolios"
                  :yaxis {:title "Return multiple" :type "log"}
                  :xaxis {:title "Bet #"}

@@ -3,14 +3,15 @@
   (:require [reagent.core :as r]
             ["plotly.js-dist-min" :as plotlyjs]))
 
-(defn -plotly-new [id data+layout] (.newPlot plotlyjs id (clj->js data+layout)))
+(defn -plotly-new [id {:keys [data layout config]}]
+  (.newPlot plotlyjs id (clj->js data) (clj->js layout) (clj->js config)))
 (defn -plotly-react [id new-state] (.react plotlyjs id (clj->js new-state)))
 
 (defn plotly
   "A Plotly plot.
 
   See https://plotly.com/javascript/ for usage."
-  [{:keys [data layout] :as plot-properties}]
+  [{:keys [data layout config] :as plot-properties}]
   (let [plot-id (str (gensym))]
     (r/create-class
       {:display-name         "plotly-plot-component"

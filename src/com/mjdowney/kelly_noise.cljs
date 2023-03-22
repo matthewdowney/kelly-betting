@@ -3,7 +3,6 @@
             [com.mjdowney.kelly.plotly :as plotly]
             [goog.array :as garray]
             [goog.functions :as gfn]
-            [leva.core :as l]
             [reagent.core :as r]
             [reagent.dom :as rdom]
             ["seedrandom" :as seedrandom]
@@ -93,15 +92,26 @@
 
 ;;; Simulation
 
+(defn rand-norm [rng mean stdev] ; box muller transform
+  (let [u1 (rng)
+        u2 (rng)
+        r (Math/sqrt (* -2 (Math/log u1)))
+        theta (* 2 Math/PI u2)]
+    (+ mean (* stdev r (Math/cos theta)))))
+
 (defn simulate*
-  [p-win-lose frac-win-lose bet-size n-portfolios n-bets rng-seed]
-  (let [[pw _pl] p-win-lose
+  [p-win-lose noise frac-win-lose bet-size n-portfolios n-bets rng-seed]
+  (let [[pw* _pl] p-win-lose
         [fw fl] frac-win-lose
         fw-minus-1 (- fw 1)
-        rng (seedrandom rng-seed)]
+        rng (seedrandom rng-seed)
+        calc-pw (if (pos? noise)
+                  (fn [] (rand-norm rng pw* noise))
+                  (constantly pw*))]
     (letfn [(make-bet [portfolio all-portfolios-array]
               (let [bankroll (peek portfolio)
                     wager (* bankroll bet-size)
+                    pw (calc-pw)
                     val (if (<= (rng) pw)
                           (+ bankroll (* wager fw-minus-1))
                           (- bankroll (* wager fl)))]
@@ -134,7 +144,7 @@
   [{:keys [p-win-lose frac-win-lose]}
    {:keys [bet-strategy bet-size noise nth-percentile]}
    n-portfolios n-bets rng-seed]
-  (msimulate* p-win-lose frac-win-lose bet-size n-portfolios n-bets rng-seed))
+  (msimulate* p-win-lose noise frac-win-lose bet-size n-portfolios n-bets rng-seed))
 
 (defn vbutlast "`butlast` for vectors" [v] (subvec v 0 (dec (count v))))
 
@@ -162,7 +172,7 @@
         :name        (str "p" perc)}])))
 
 (defn bet-size-optimization-data
-  [{:keys [p-win-lose frac-win-lose]} nth-percentile n-portfolios n-bets rng-seed]
+  [{:keys [p-win-lose frac-win-lose]} noise nth-percentile n-portfolios n-bets rng-seed]
   (let [nth-percentile-idx (int
                              (Math/floor
                                (* (dec n-portfolios)
@@ -173,7 +183,7 @@
                 (let [bet-size (/ n 100.0)
                       results (peek
                                 (peek
-                                  (simulate* p-win-lose frac-win-lose
+                                  (simulate* p-win-lose noise frac-win-lose
                                     bet-size n-portfolios n-bets rng-seed)))
                       return (nth results nth-percentile-idx)
                       best (if (> return (peek best)) [bet-size return] best)]
@@ -206,7 +216,7 @@
 
 (defn bsod-getter []
   (let [bsod (r/atom nil)]
-    (letfn [(recompute [wager-controls nth-perc]
+    (letfn [(recompute [wager-controls noise nth-perc]
               (swap! bsod assoc :x [] :y [] :best nil :complete false)
               (incr-into-atom bsod 10
                 (fn
@@ -216,22 +226,21 @@
                        (update :y conj (:y x))
                        (assoc :best (:best x))))
                   ([state] (assoc state :complete true)))
-                (bet-size-optimization-data
-                  wager-controls nth-perc
+                (bet-size-optimization-data wager-controls noise nth-perc
                   100 100 1)))]
       (let [recompute (enc/memoize-last recompute)]
-        (fn [wager-controls nth-percentile]
-          (recompute wager-controls nth-percentile)
+        (fn [wager-controls noise nth-percentile]
+          (recompute wager-controls noise nth-percentile)
           @bsod)))))
 
 (defn optimization-plot [{:keys [width]}]
   (let [get-bsod (bsod-getter)
         get-bsodp50 (bsod-getter)]
     (fn [{:keys [width]}]
-      (let [{:keys [bet-size nth-percentile]} @behavior-controls
-            bsod (get-bsod @wager-controls nth-percentile)
+      (let [{:keys [bet-size nth-percentile noise]} @behavior-controls
+            bsod (get-bsod @wager-controls noise nth-percentile)
             bsod1 (when-not (= nth-percentile 50)
-                    (get-bsodp50 @wager-controls 50))
+                    (get-bsodp50 @wager-controls noise 50))
             idx (* bet-size 100)]
         [plotly/plotly
          {:data (enc/conj-some

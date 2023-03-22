@@ -100,9 +100,13 @@
     (+ mean (* stdev r (Math/cos theta)))))
 
 (defn simulate*
-  [p-win-lose noise frac-win-lose bet-size n-portfolios n-bets rng-seed]
+  [{:keys [p-win-lose noise frac-win-lose bet-size bet-strategy n-portfolios n-bets rng-seed]}]
   (let [[pw* _pl] p-win-lose
         [fw fl] frac-win-lose
+        bet-size (if (= bet-strategy "% of bankroll")
+                   bet-size
+                   (let [kelly-bet (- (/ pw* fl) (/ (- 1 pw*) (- fw 1)))]
+                     (* kelly-bet bet-size)))
         fw-minus-1 (- fw 1)
         rng (seedrandom rng-seed)
         calc-pw (if (pos? noise)
@@ -110,7 +114,7 @@
                   (constantly pw*))]
     (letfn [(make-bet [portfolio all-portfolios-array]
               (let [bankroll (peek portfolio)
-                    wager (* bankroll bet-size)
+                    wager (* bankroll (max bet-size 0))
                     pw (calc-pw)
                     val (if (<= (rng) pw)
                           (+ bankroll (* wager fw-minus-1))
@@ -144,7 +148,15 @@
   [{:keys [p-win-lose frac-win-lose]}
    {:keys [bet-strategy bet-size noise nth-percentile]}
    n-portfolios n-bets rng-seed]
-  (msimulate* p-win-lose noise frac-win-lose bet-size n-portfolios n-bets rng-seed))
+  (msimulate*
+    {:p-win-lose p-win-lose
+     :noise noise
+     :frac-win-lose frac-win-lose
+     :bet-size bet-size
+     :bet-strategy bet-strategy
+     :n-portfolios n-portfolios
+     :n-bets n-bets
+     :rng-seed rng-seed}))
 
 (defn vbutlast "`butlast` for vectors" [v] (subvec v 0 (dec (count v))))
 
@@ -172,19 +184,27 @@
         :name        (str "p" perc)}])))
 
 (defn bet-size-optimization-data
-  [{:keys [p-win-lose frac-win-lose]} noise nth-percentile n-portfolios n-bets rng-seed]
+  [{:keys [p-win-lose frac-win-lose]} noise bet-strategy nth-percentile n-portfolios n-bets rng-seed]
   (let [nth-percentile-idx (int
                              (Math/floor
                                (* (dec n-portfolios)
-                                  (/ nth-percentile 100))))]
+                                  (/ nth-percentile 100))))
+        limit (if (= bet-strategy "% of bankroll") 100 150)]
     (letfn [(optimize* [best n]
               (lazy-seq
-              (when (<= n 100)
+              (when (<= n limit)
                 (let [bet-size (/ n 100.0)
                       results (peek
                                 (peek
-                                  (simulate* p-win-lose noise frac-win-lose
-                                    bet-size n-portfolios n-bets rng-seed)))
+                                  (simulate*
+                                    {:p-win-lose p-win-lose
+                                     :noise noise
+                                     :frac-win-lose frac-win-lose
+                                     :bet-size bet-size
+                                     :bet-strategy bet-strategy
+                                     :n-portfolios n-portfolios
+                                     :n-bets n-bets
+                                     :rng-seed rng-seed})))
                       return (nth results nth-percentile-idx)
                       best (if (> return (peek best)) [bet-size return] best)]
                   (cons
@@ -216,7 +236,7 @@
 
 (defn bsod-getter []
   (let [bsod (r/atom nil)]
-    (letfn [(recompute [wager-controls noise nth-perc]
+    (letfn [(recompute [wager-controls noise bet-strategy nth-perc]
               (swap! bsod assoc :x [] :y [] :best nil :complete false)
               (incr-into-atom bsod 10
                 (fn
@@ -226,22 +246,23 @@
                        (update :y conj (:y x))
                        (assoc :best (:best x))))
                   ([state] (assoc state :complete true)))
-                (bet-size-optimization-data wager-controls noise nth-perc
-                  100 100 1)))]
+                (bet-size-optimization-data wager-controls noise bet-strategy
+                  nth-perc 100 100 1)))]
       (let [recompute (enc/memoize-last recompute)]
-        (fn [wager-controls noise nth-percentile]
-          (recompute wager-controls noise nth-percentile)
+        (fn [wager-controls noise bet-strategy nth-percentile]
+          (recompute wager-controls noise bet-strategy nth-percentile)
           @bsod)))))
 
 (defn optimization-plot [{:keys [width]}]
   (let [get-bsod (bsod-getter)
         get-bsodp50 (bsod-getter)]
     (fn [{:keys [width]}]
-      (let [{:keys [bet-size nth-percentile noise]} @behavior-controls
-            bsod (get-bsod @wager-controls noise nth-percentile)
+      (let [{:keys [bet-size nth-percentile noise bet-strategy]} @behavior-controls
+            bsod (get-bsod @wager-controls noise bet-strategy nth-percentile)
             bsod1 (when-not (= nth-percentile 50)
-                    (get-bsodp50 @wager-controls noise 50))
-            idx (* bet-size 100)]
+                    (get-bsodp50 @wager-controls noise bet-strategy 50))
+            idx (* bet-size 100)
+            xmax (if (= bet-strategy "% of bankroll") 1 1.5)]
         [plotly/plotly
          {:data (enc/conj-some
                   [(assoc bsod
@@ -255,18 +276,21 @@
                      :type :scatter
                      :mode :markers
                      :marker {:color "red" :size 8}
-                     :name " "
-                     :showlegend false}))
+                     :name (str "selected = " (nth (:x bsod) idx))
+                     :showlegend true})
+
+                  (when (:complete bsod)
+                    {:x [(get-in bsod [:best 0])]
+                     :y [(get-in bsod [:best 1])]
+                     :type :scatter
+                     :name (str "optimal f* = " (get-in bsod [:best 0]))
+                     :marker {:color "green" :size 8}
+                     :showlegend true}))
           :layout {:title "Return multiple by bet size"
-                   :xaxis {:title "Bet size" :range [0 1]}
+                   :xaxis {:title "Bet size" :range [0 xmax]}
                    :legend {:x 1 :y 1 :xanchor :right}
                    :margin {:r 30}
-                   :width  width
-                   :annotations (when (:complete bsod)
-                                  [{:x (get-in bsod [:best 0])
-                                    :y (get-in bsod [:best 1])
-                                    :text (str "f* = " (get-in bsod [:best 0]))
-                                    :showarrow true}])}}]))))
+                   :width  width}}]))))
 
 (defonce window
   (let [a (r/atom (.-innerWidth js/window))]

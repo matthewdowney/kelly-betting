@@ -241,11 +241,10 @@
                    :margin {:r 30}
                    :width  width}}]))))
 
-;;; ===========================================================================
 ;;; WIP 3D optimization plot
-;;; ===========================================================================
 
-(defonce o3d (r/atom {:x [] :y [] :z []}))
+(defonce bet-noise-return3d (r/atom {:x [] :y [] :z []}))
+(defonce bet-return3d (r/atom {:x [] :y [] :z []}))
 
 (defn o3d-reward [results idx]
   (aget
@@ -253,9 +252,9 @@
       garray/sort)
     idx))
 
-(defn o3d-data
+(defn bet-noise-return-data3d
   ([]
-   (o3d-data (get @view-controls :nth-percentile)))
+   (bet-noise-return-data3d (get @view-controls :nth-percentile)))
   ([nth-perc]
    (let [bc @behavior-controls
          wc @wager-controls
@@ -273,9 +272,25 @@
                false)
              idx)}))))
 
-(defn compute-o3d []
-  (reset! o3d {:x [] :y [] :z []})
-  (incr-into-atom o3d 3
+;; TODO: Add sliders to limit the bet size and nth perc ranges here
+(defn bet-return-data3d []
+  (let [bc @behavior-controls
+        wc @wager-controls]
+    (for [bet-size (range 0 81 1)
+          :let [results (run-portfolio-simulation
+                          (assoc bc :bet-size bet-size)
+                          wc
+                          false)]
+          nth-perc (range 25 76 5)]
+      {:x nth-perc
+       :y bet-size
+       :z (Math/log (o3d-reward
+                      results
+                      (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100))))))})))
+
+(defn compute-o3d [atom-3d lazy-3d-data-fn chunk-size]
+  (reset! atom-3d {:x [] :y [] :z []})
+  (incr-into-atom atom-3d chunk-size
     (fn
       ([state {:keys [x y z]}]
        (let [last-x (peek (:x state))]
@@ -294,18 +309,11 @@
              :y (conj (:y state) y)
              :z (conj (:z state) [z])))))
       ([state] state))
-    (o3d-data)))
+    (lazy-3d-data-fn)))
 
-;; same as the function above, but swapping x and y
-
-(comment
-  (compute-o3d)
-  @o3d)
-
-(defn plot-o3d [{:keys [width]}]
-  (let [t (r/track compute-o3d)
-        ;@wager-controls
-        {:keys [x y z]} @o3d]
+(defn plot-bet-noise-return3d [{:keys [width]}]
+  (let [t (r/track compute-o3d bet-noise-return3d bet-noise-return-data3d 3)
+        {:keys [x y z]} @bet-noise-return3d]
     @t
     [plotly/plotly
      {:data   [{:x x
@@ -313,23 +321,33 @@
                 :z z
                 :opacity    1
                 :showlegend false
-                :type       :surface
-                #_#_:mode       :lines
-                #_#_:line      {:width 3 :colorscale "Viridis" :color z}}]
+                :type       :surface}]
       :layout {:scene {:yaxis  {:title "Noise"
                                 :range [1 (* (first (:p-win-lose @wager-controls)) 100)]}
                        :xaxis  {:title "Bet size"
                                 :range [1 100]}
-                       :zaxis  {:title "Return %"
-                                #_#_:type  (if (:log-axis @plot-settings) "log" "linear")}}
-
-               :margin {:t 00 :b 0}
+                       :zaxis  {:title "Return %"}}
+               :margin {:t 0 :b 0}
                :width  width
                :height 800}}]))
 
-;;; ===========================================================================
-;;; End WIP 3D optimization plot
-;;; ===========================================================================
+(defn plot-bet-return3d [{:keys [width]}]
+  (let [t (r/track compute-o3d bet-return3d bet-return-data3d 50)
+        {:keys [x y z]} @bet-return3d]
+    @t
+    [plotly/plotly
+     {:data   [{:x x
+                :y y
+                :z z
+                :opacity    1
+                :showlegend false
+                :type       :surface}]
+      :layout {:scene {:xaxis  {:title "nth percentile" :range [25 75]}
+                       :yaxis  {:title "Bet size" :range [1 100]}
+                       :zaxis  {:title "Return %"}}
+               :margin {:t 0 :b 0}
+               :width  width
+               :height 800}}]))
 
 (defonce window
   (let [a (r/atom (.-innerWidth js/window))]
@@ -358,7 +376,8 @@
       [leva-controls]]
      [:div {:style {:display (if large-window? :flex :grid)
                     :justify-content :center}}
-      [plot-o3d {:width plot-width}]]]))
+      [plot-bet-noise-return3d {:width plot-width}]
+      [plot-bet-return3d {:width plot-width}]]]))
 
 ;;; Lifecycle / entry point
 

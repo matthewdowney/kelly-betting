@@ -69,6 +69,28 @@
     :max   100
     :step  1}})
 
+(defonce controls3d
+  (r/atom
+    {:bet-sizes [0 85]
+     :percentiles [25 75]
+     :log-return? true}))
+
+(def controls3d-schema
+  {:bet-sizes
+   {:label    "Bet limits"
+    :hint     "Exclude the extremes to get a more viewable plot."
+    :min 0
+    :max 100
+    :joystick false}
+   :percentiles
+   {:label    "pN limits"
+    :hint     "Percentiles. Exclude extremes for a more viewable plot."
+    :min 0
+    :max 100
+    :joystick false}
+   :log-return?
+   {:hint  "Plot log returns instead of returns."}})
+
 (def leva-theme
   {:sizes   {:titleBarHeight "30px"}
    :shadows {:level1 "none" :level2 "none"}
@@ -81,11 +103,40 @@
              :elevation2 "#ffffff0b"
              :elevation3 "#292d39ff"}})
 
+(defonce floating-window? (r/atom false))
+
+(def popout-arrow-svg "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\">\n    <path d=\"M7.646 11.354l2.853-2.853-2.853-2.854a.5.5 0 0 1 .708-.708l3 3a.5.5 0 0 1 0 .708l-3 3a.5.5 0 0 1-.708-.708z\"/>\n  </svg>")
+
+(defn create-popout-arrow []
+  (when-let [ele (enc/rfirst
+                   (fn [node] (= (.-textContent node) "Controls"))
+                   (js/document.querySelectorAll "div[class^='leva-']"))]
+    ;; append a button to the element's children
+    (let [first-child-class (.-className (first (.-children ele)))
+          rotation (if @floating-window? 180 0)
+          i (doto (.createElement js/document "i")
+              (.setAttribute "id" "custom-leva-popout-arrow")
+              (.setAttribute "class" first-child-class)
+              (.setAttribute "style"
+                (str "margin-left: -4em; transform: rotate(" rotation "deg);")))]
+      (set! (.-innerHTML i) popout-arrow-svg)
+      (.appendChild ele i)
+      (.addEventListener i "click"
+        #(let [rotation (if (swap! floating-window? not) 180 0)]
+           (set! (.-transform (.-style i)) (str "rotate(" rotation "deg)"))))
+      i)))
+
+(defn get-or-create-popout-arrow []
+  (or
+    (js/document.getElementById "custom-leva-popout-arrow")
+    (create-popout-arrow)))
+
 (defn leva-controls []
+  (get-or-create-popout-arrow)
   [leva/SubPanel
-   {:fill           true
+   {:fill           (not @floating-window?)
     :flat           false
-    :titleBar       {:drag false :filter false :title "Controls"}
+    :titleBar       {:drag @floating-window? :filter false :title "Controls"}
     :hideCopyButton true
     :theme          leva-theme}
    [:<>
@@ -100,7 +151,12 @@
     [leva/Controls
      {:folder {:name "View"}
       :atom   view-controls
-      :schema view-controls-schema}]]])
+      :schema view-controls-schema}]
+    [leva/Controls
+     {:folder {:name "3d plots"}
+      :atom   controls3d
+      :schema controls3d-schema}]
+    ]])
 
 ;;; Simulation
 
@@ -272,21 +328,20 @@
                false)
              idx)}))))
 
-;; TODO: Add sliders to limit the bet size and nth perc ranges here
 (defn bet-return-data3d []
   (let [bc @behavior-controls
-        wc @wager-controls]
-    (for [bet-size (range 0 81 1)
+        wc @wager-controls
+        {:keys [bet-sizes percentiles]} @controls3d]
+    (for [bet-size (apply range bet-sizes)
           :let [results (run-portfolio-simulation
                           (assoc bc :bet-size bet-size)
                           wc
                           false)]
-          nth-perc (range 25 76 5)]
+          nth-perc (apply range percentiles)]
       {:x nth-perc
        :y bet-size
-       :z (Math/log (o3d-reward
-                      results
-                      (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100))))))})))
+       :z (o3d-reward results
+            (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100)))))})))
 
 (defn compute-o3d [atom-3d lazy-3d-data-fn chunk-size]
   (reset! atom-3d {:x [] :y [] :z []})
@@ -332,18 +387,21 @@
                :height 800}}]))
 
 (defn plot-bet-return3d [{:keys [width]}]
-  (let [t (r/track compute-o3d bet-return3d bet-return-data3d 50)
+  (let [{:keys [bet-sizes percentiles log-return?]} @controls3d
+        t (r/track compute-o3d bet-return3d bet-return-data3d 50)
         {:keys [x y z]} @bet-return3d]
     @t
     [plotly/plotly
      {:data   [{:x x
                 :y y
-                :z z
+                :z (if log-return?
+                     (map (fn [xs] (map #(Math/log %) xs)) z)
+                     z)
                 :opacity    1
                 :showlegend false
                 :type       :surface}]
-      :layout {:scene {:xaxis  {:title "nth percentile" :range [25 75]}
-                       :yaxis  {:title "Bet size" :range [1 100]}
+      :layout {:scene {:xaxis  {:title "nth percentile" :range percentiles}
+                       :yaxis  {:title "Bet size" :range bet-sizes}
                        :zaxis  {:title "Return %"}}
                :margin {:t 0 :b 0}
                :width  width
@@ -355,11 +413,13 @@
       (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
     a))
 
+;; TODO: Improve chart titles all around
 (defn app []
   (let [large-window? (> @window 900)
         plot-width (if large-window?
                      (- (enc/clamp 400 1000 (/ @window 2)) 20)
                      (- @window 50))]
+
     [:div
      [:div {:style {:display (if large-window? :flex :grid)
                     :justify-content :center}}
@@ -374,13 +434,26 @@
       [optimization-plot {:width plot-width}]]
      [:div.container.leva {:style {:line-height 2.45}}
       [leva-controls]]
-     [:div {:style {:display (if large-window? :flex :grid)
-                    :justify-content :center}}
-      [plot-bet-noise-return3d {:width plot-width}]
-      [plot-bet-return3d {:width plot-width}]]]))
+
+     (let [plot-width (- (enc/clamp 800 1600 (/ @window 2)) 20)]
+       [:div {:style {:display :grid :justify-content :center}}
+        [plot-bet-noise-return3d {:width plot-width}]
+        [plot-bet-return3d {:width plot-width}]])]))
 
 ;;; Lifecycle / entry point
 
-(defn start [] (rdom/render [app] (.getElementById js/document "app")))
-(defn stop [] (js/console.log "stopping..."))
+;; Add a mutation observer to add the popout arrow when the leva panel is changed
+(def leva-popout-arrow-hack
+  (js/MutationObserver. (fn [_ _] (get-or-create-popout-arrow))))
+
+(defn start []
+  (rdom/render [app] (.getElementById js/document "app"))
+  (.observe leva-popout-arrow-hack (.getElementById js/document "app")
+    #js {:childList true :subtree true}))
+
+(defn stop []
+  ;; Remove mutation observer
+  (.disconnect leva-popout-arrow-hack)
+  (js/console.log "stopping..."))
+
 (defn ^:export init [] (start))

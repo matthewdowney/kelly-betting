@@ -113,17 +113,20 @@
         [fw fl] frac-win-lose]
     (- (/ pw* fl) (/ (- 1 pw*) (- fw 1)))))
 
-(defn run-portfolio-simulation [{strat :bet-strategy bet :bet-size} wc]
-  (let [pw (first (:p-win-lose wc))
-        bet (/ bet 100.0)
-        noise (/ (:noise wc) 100.0)]
-    (simulate
-      {:rng-seed 1
-       :p-winf   (if (pos? noise) (sim/random-pwin-fn pw noise) (constantly pw))
-       :odds     (:frac-win-lose wc)
-       :bet-size (if (= strat "% of bankroll") bet (* bet (kelly-bet wc)))
-       :nps      n-portfolios
-       :nbs      100})))
+(defn run-portfolio-simulation
+  ([bc wc] (run-portfolio-simulation bc wc true))
+  ([{strat :bet-strategy bet :bet-size} wc sort?]
+   (let [pw (first (:p-win-lose wc))
+         bet (/ bet 100.0)
+         noise (/ (:noise wc) 100.0)]
+     (simulate
+       {:rng-seed 1
+        :p-winf   (if (pos? noise) (sim/random-pwin-fn pw noise) (constantly pw))
+        :odds     (:frac-win-lose wc)
+        :bet-size (if (= strat "% of bankroll") bet (* bet (kelly-bet wc)))
+        :nps      n-portfolios
+        :nbs      100
+        :sorted?  sort?}))))
 
 (defn portfolio-simulation-plot-data []
   (let [bh @behavior-controls
@@ -238,6 +241,96 @@
                    :margin {:r 30}
                    :width  width}}]))))
 
+;;; ===========================================================================
+;;; WIP 3D optimization plot
+;;; ===========================================================================
+
+(defonce o3d (r/atom {:x [] :y [] :z []}))
+
+(defn o3d-reward [results idx]
+  (aget
+    (doto (into-array (-> results peek peek))
+      garray/sort)
+    idx))
+
+(defn o3d-data
+  ([]
+   (o3d-data (get @view-controls :nth-percentile)))
+  ([nth-perc]
+   (let [bc @behavior-controls
+         wc @wager-controls
+         idx (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100))))]
+     (for [noise (concat (range 0 10 2)
+                   (range 10 20 4)
+                   (range 20 (long (* (first (:p-win-lose wc)) 100)) 8))
+           bet-size (range 0 101 2)]
+       {:x bet-size
+        :y noise
+        :z (o3d-reward
+             (run-portfolio-simulation
+               (assoc bc :bet-size bet-size)
+               (assoc wc :noise noise)
+               false)
+             idx)}))))
+
+(defn compute-o3d []
+  (reset! o3d {:x [] :y [] :z []})
+  (incr-into-atom o3d 3
+    (fn
+      ([state {:keys [x y z]}]
+       (let [last-x (peek (:x state))]
+         (if (= y (peek (:y state)))
+           ; same y, new x
+           (let [zs (get state :z)]
+             (assoc state
+               :x (if (and last-x (<= x last-x))
+                    (:x state)
+                    (conj (:x state) x))
+               :z (update zs (dec (count zs)) conj z)))
+           (assoc state
+             :x (if (and last-x (<= x last-x))
+                  (:x state)
+                  (conj (:x state) x))
+             :y (conj (:y state) y)
+             :z (conj (:z state) [z])))))
+      ([state] state))
+    (o3d-data)))
+
+;; same as the function above, but swapping x and y
+
+(comment
+  (compute-o3d)
+  @o3d)
+
+(defn plot-o3d [{:keys [width]}]
+  (let [t (r/track compute-o3d)
+        ;@wager-controls
+        {:keys [x y z]} @o3d]
+    @t
+    [plotly/plotly
+     {:data   [{:x x
+                :y y
+                :z z
+                :opacity    1
+                :showlegend false
+                :type       :surface
+                #_#_:mode       :lines
+                #_#_:line      {:width 3 :colorscale "Viridis" :color z}}]
+      :layout {:scene {:yaxis  {:title "Noise"
+                                :range [1 (* (first (:p-win-lose @wager-controls)) 100)]}
+                       :xaxis  {:title "Bet size"
+                                :range [1 100]}
+                       :zaxis  {:title "Return %"
+                                #_#_:type  (if (:log-axis @plot-settings) "log" "linear")}}
+
+               :margin {:t 00 :b 0}
+               :width  width
+               :height 800}}]))
+
+;;; ===========================================================================
+;;; End WIP 3D optimization plot
+;;; ===========================================================================
+
 (defonce window
   (let [a (r/atom (.-innerWidth js/window))]
     (.addEventListener js/window "resize"
@@ -262,7 +355,10 @@
                  :width  plot-width}}]
       [optimization-plot {:width plot-width}]]
      [:div.container.leva {:style {:line-height 2.45}}
-      [leva-controls]]]))
+      [leva-controls]]
+     [:div {:style {:display (if large-window? :flex :grid)
+                    :justify-content :center}}
+      [plot-o3d {:width plot-width}]]]))
 
 ;;; Lifecycle / entry point
 

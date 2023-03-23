@@ -71,12 +71,22 @@
 
 (defonce controls3d
   (r/atom
-    {:bet-sizes [0 85]
+    {:show3d-plots? false
+     :large-plots? false
+     :bet-sizes [0 85]
      :percentiles [25 75]
      :log-return? true}))
 
 (def controls3d-schema
-  {:bet-sizes
+  {:show3d-plots?
+   {:label "Show plots"
+    :hint  "Show 3D plots? They are slow to render!"}
+
+   :large-plots?
+   {:label "Large plots"
+    :hint  "Force 3d plots to take up the whole row."}
+
+   :bet-sizes
    {:label    "Bet limits"
     :hint     "Exclude the extremes to get a more viewable plot."
     :min 0
@@ -155,8 +165,7 @@
     [leva/Controls
      {:folder {:name "3d plots"}
       :atom   controls3d
-      :schema controls3d-schema}]
-    ]])
+      :schema controls3d-schema}]]])
 
 ;;; Simulation
 
@@ -322,11 +331,12 @@
   ([nth-perc]
    (let [bc @behavior-controls
          wc @wager-controls
+         {:keys [bet-sizes]} @controls3d
          idx (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100))))]
      (for [noise (concat (range 0 10 2)
                    (range 10 20 4)
                    (range 20 (long (* (first (:p-win-lose wc)) 100)) 8))
-           bet-size (range 0 101 2)]
+           bet-size (apply range bet-sizes)]
        {:x bet-size
         :y noise
         :z (o3d-reward
@@ -376,12 +386,13 @@
 
 (defn plot-bet-noise-return3d [{:keys [width]}]
   (let [t (r/track compute-o3d bet-noise-return3d bet-noise-return-data3d 3)
-        {:keys [x y z]} @bet-noise-return3d]
+        {:keys [x y z]} @bet-noise-return3d
+        {:keys [bet-sizes log-return?]} @controls3d]
     @t
     [plotly/plotly
      {:data   [{:x x
                 :y y
-                :z z
+                :z (if log-return? (map (fn [xs] (map #(Math/log %) xs)) z) z)
                 :opacity    1
                 :showlegend false
                 :type       :surface}]
@@ -390,8 +401,8 @@
                        :xaxis  {:title (if (= (:bet-strategy @behavior-controls) "% of Kelly bet")
                                          "% of Kelly bet"
                                          "% of bankroll")
-                                :range [1 100]}
-                       :zaxis  {:title "return multiple"}}
+                                :range bet-sizes}
+                       :zaxis  {:title (if log-return? "log(return multiple)" "return multiple")}}
                :margin {:t 0 :b 0}
                :width  width
                :height 800}}]))
@@ -404,9 +415,7 @@
     [plotly/plotly
      {:data   [{:x x
                 :y y
-                :z (if log-return?
-                     (map (fn [xs] (map #(Math/log %) xs)) z)
-                     z)
+                :z (if log-return? (map (fn [xs] (map #(Math/log %) xs)) z) z)
                 :opacity    1
                 :showlegend false
                 :type       :surface}]
@@ -415,9 +424,7 @@
                                          "fraction of Kelly bet"
                                          "bet size")
                                          :range bet-sizes}
-                       :zaxis  {:title (if log-return?
-                                         "log(return multiple)"
-                                         "return multiple")}}
+                       :zaxis  {:title (if log-return? "log(return multiple)" "return multiple")}}
                :margin {:t 0 :b 0}
                :width  width
                :height 800}}]))
@@ -437,7 +444,7 @@
     [:div
      [:div {:style {:display (if large-window? :flex :grid)
                     :justify-content :center}}
-      (let [{:keys [nth-percentile return data]} (portfolio-simulation-plot-data)]
+      (let [{:keys [data]} (portfolio-simulation-plot-data)]
         [plotly/plotly
          {:data data
           :layout {:title (str "Simulated return for " n-portfolios " portfolios over 100 bets")
@@ -450,10 +457,13 @@
      [:div.container.leva {:style {:line-height 2.45}}
       [leva-controls]]
 
-     (let [plot-width (- (enc/clamp 800 1600 (/ @window 2)) 20)]
-       [:div {:style {:display :grid :justify-content :center}}
-        [plot-bet-noise-return3d {:width plot-width}]
-        [plot-bet-return3d {:width plot-width}]])]))
+     (when (:show3d-plots? @controls3d)
+       (let [plot-width (- (enc/clamp 800 1600 (/ @window 2)) 20)
+             plot-width (if (:large-plots? @controls3d) plot-width (- (/ @window 2) 20))]
+         [:div {:style {:display (if (:large-plots? @controls3d) :grid :flex)
+                        :justify-content :center}}
+          [plot-bet-noise-return3d {:width plot-width}]
+          [plot-bet-return3d {:width plot-width}]]))]))
 
 ;;; Lifecycle / entry point
 

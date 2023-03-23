@@ -189,21 +189,24 @@
         wc @wager-controls
         results (run-portfolio-simulation bh wc)
         perc (:nth-percentile @view-controls)
-        nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ perc 100))))]
-    (concat
-      (map
-        (fn [portfolio]
-          {:y          portfolio
-           :opacity    0.15
-           :showlegend false
-           :type       :scatter})
-        (vbutlast results))
-      [{:y           (mapv #(nth % nth-percentile-idx) (peek results))
-        :opacity     1
-        :showledgend true
-        :perc        perc
-        :line        {:width 3}
-        :name        (str "p" perc)}])))
+        nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ perc 100))))
+        nth-perc-returns (mapv #(nth % nth-percentile-idx) (peek results))]
+    {:nth-percentile perc
+     :return (peek nth-perc-returns)
+     :data (concat
+             (map
+               (fn [portfolio]
+                 {:y          portfolio
+                  :opacity    0.15
+                  :showlegend false
+                  :type       :scatter})
+               (vbutlast results))
+             [{:y           nth-perc-returns
+               :opacity     1
+               :showledgend true
+               :perc        perc
+               :line        {:width 3}
+               :name        (str "p" perc)}])}))
 
 (defn bet-size-optimization-data
   [{:keys [p-win-lose frac-win-lose noise] :as wc} strat nth-percentile n-portfolios n-bets rng-seed]
@@ -292,7 +295,12 @@
                      :marker {:color "green" :size 8}
                      :showlegend true}))
           :layout {:title "Return multiple by bet size"
-                   :xaxis {:title "Bet size" :range [0 xmax]}
+                   :xaxis {:title (str "bet size ("
+                                       (if (= bet-strategy "% of bankroll")
+                                         "fraction of bankroll"
+                                         "fraction of kelly bet")
+                                       ")")
+                           :range [0 xmax]}
                    :legend {:x 1 :y 1 :xanchor :right}
                    :margin {:r 30}
                    :width  width}}]))))
@@ -377,11 +385,13 @@
                 :opacity    1
                 :showlegend false
                 :type       :surface}]
-      :layout {:scene {:yaxis  {:title "Noise"
+      :layout {:scene {:yaxis  {:title "noise"
                                 :range [1 (* (first (:p-win-lose @wager-controls)) 100)]}
-                       :xaxis  {:title "Bet size"
+                       :xaxis  {:title (if (= (:bet-strategy @behavior-controls) "% of Kelly bet")
+                                         "% of Kelly bet"
+                                         "% of bankroll")
                                 :range [1 100]}
-                       :zaxis  {:title "Return %"}}
+                       :zaxis  {:title "return multiple"}}
                :margin {:t 0 :b 0}
                :width  width
                :height 800}}]))
@@ -401,8 +411,13 @@
                 :showlegend false
                 :type       :surface}]
       :layout {:scene {:xaxis  {:title "nth percentile" :range percentiles}
-                       :yaxis  {:title "Bet size" :range bet-sizes}
-                       :zaxis  {:title "Return %"}}
+                       :yaxis  {:title (if (= (:bet-strategy @behavior-controls) "% of Kelly bet")
+                                         "fraction of Kelly bet"
+                                         "bet size")
+                                         :range bet-sizes}
+                       :zaxis  {:title (if log-return?
+                                         "log(return multiple)"
+                                         "return multiple")}}
                :margin {:t 0 :b 0}
                :width  width
                :height 800}}]))
@@ -413,7 +428,6 @@
       (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
     a))
 
-;; TODO: Improve chart titles all around
 (defn app []
   (let [large-window? (> @window 900)
         plot-width (if large-window?
@@ -423,14 +437,15 @@
     [:div
      [:div {:style {:display (if large-window? :flex :grid)
                     :justify-content :center}}
-      [plotly/plotly
-       {:data (portfolio-simulation-plot-data)
-        :layout {:title "Simulated portfolios"
-                 :yaxis {:title "Return multiple" :type "log"}
-                 :xaxis {:title "Bet #"}
-                 :legend {:x 1 :y 1 :xanchor :right}
-                 :margin {:r 10}
-                 :width  plot-width}}]
+      (let [{:keys [nth-percentile return data]} (portfolio-simulation-plot-data)]
+        [plotly/plotly
+         {:data data
+          :layout {:title (str "Simulated return for " n-portfolios " portfolios over 100 bets")
+                   :yaxis {:title "return multiple" :type "log"}
+                   :xaxis {:title "bet #"}
+                   :legend {:x 1 :y 1 :xanchor :right}
+                   :margin {:r 10}
+                   :width  plot-width}}])
       [optimization-plot {:width plot-width}]]
      [:div.container.leva {:style {:line-height 2.45}}
       [leva-controls]]

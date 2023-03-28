@@ -14,12 +14,12 @@
 
           :site {:target :browser
                  :output-dir "../matthewdowney.github.io/static/js/kelly-noise"
-                 :asset-path "/static/js/kelly-noise"
-                 :modules {:main {:entries [com.mjdowney.kelly-noise]}}
+                 :asset-path "/static/js/kelly-simulator"
+                 :modules {:main {:entries [com.mjdowney.kelly-simulator]}}
                  :devtools {:preloads [hashp.core]
-                            :repl-init-ns com.mjdowney.kelly-noise
+                            :repl-init-ns com.mjdowney.kelly-simulator
                             :repl-pprint true
-                            :before-load com.mjdowney.kelly-noise/stop
-                            :after-load com.mjdowney.kelly-noise/start
+                            :before-load com.mjdowney.kelly-simulator/stop
+                            :after-load com.mjdowney.kelly-simulator/start
                             :http-root "public"
                             :http-port 8020}}}}

@@ -1,16 +1,16 @@
 ; use deps.edn with the :shadow alias
 {:deps {:aliases [:shadow]}
  :builds {:app {:target :browser
-                :output-dir "public/js"
-                :asset-path "js"
-                :modules {:main {:entries [com.mjdowney.kelly-noise]}}
-                :devtools {:preloads [hashp.core]
-                           :repl-init-ns com.mjdowney.kelly-noise
-                           :repl-pprint true
-                           :before-load com.mjdowney.kelly-noise/stop
-                           :after-load com.mjdowney.kelly-noise/start
-                           :http-root "public"
-                           :http-port 8020}}
+                 :output-dir "public/js/kelly-simulator"
+                 :asset-path "js/kelly-simulator"
+                 :modules {:main {:entries [com.mjdowney.kelly-simulator]}}
+                 :devtools {:preloads [hashp.core]
+                            :repl-init-ns com.mjdowney.kelly-simulator
+                            :repl-pprint true
+                            :before-load com.mjdowney.kelly-simulator/stop
+                            :after-load com.mjdowney.kelly-simulator/start
+                            :http-root "public"
+                            :http-port 8020}}
 
           :site {:target :browser
                  :output-dir "../matthewdowney.github.io/static/js/kelly-simulator"

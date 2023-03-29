@@ -5,9 +5,35 @@
     <title>Kelly Betting</title>
 </head>
 <body>
-<style scoped> @media (max-width: 1250px) {.plotly-plot { order: 1; }}</style>
-<div id="app"></div>
-<script src="./js/main.js"></script>
-<script>com.mjdowney.kelly_noise.init();</script>
+
+<style>
+    .gtitle, .xtitle, .ytitle {font-weight: 100 !important;}
+    .full-width {width: 100%; margin-bottom: 5em;}
+</style>
+
+<h2>Simulating the effect of uncertainty</h2>
+<div class="full-width" id="uncertainty-sim">
+    <div style="display: flex; justify-content: center; margin-top: 10em; margin-bottom: 10em;">
+        <p>Loading JavaScript...</p>
+    </div>
+</div>
+
+<h2>Simulating the effect of risk of ruin</h2>
+<div class="full-width" id="risk-of-ruin-sim">
+    <div style="display: flex; justify-content: center; margin-top: 10em; margin-bottom: 10em;">
+        <p>Loading JavaScript...</p>
+    </div>
+</div>
+
+<h2>Simulating the effect of downside risk mitigation</h2>
+<div class="full-width" id="downside-risk-sim">
+    <div style="display: flex; justify-content: center; margin-top: 10em; margin-bottom: 10em;">
+        <p>Loading JavaScript...</p>
+    </div>
+</div>
+
+
 </body>
+
+<script src="js/kelly-simulator/main.js" async defer onload="com.mjdowney.kelly_simulator.init();"></script>
 </html>

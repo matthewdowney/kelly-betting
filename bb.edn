@@ -6,15 +6,22 @@
                                   (get-in [:builds :site :output-dir]))]
                           (println "Deleting" p)
                           (fs/delete-tree p))}
+
   dev        {:doc  "Launch the dev environment."
               :task (do (run '-clean) (shell "npx shadow-cljs watch :site"))}
+
   release    {:doc  "Compile CLJS for release."
               :task (do (run '-clean) (shell "npx shadow-cljs release :site"))}
-
 
   ; For standalone development, using just this repo, and none of the blog code
   standalone {:doc      "Launch the standalone version of the dev environment using this repository's index.html file, instead of the blog."
               :requires ([babashka.fs :as fs])
               :task     (do
                           (fs/delete-tree "public/js")
-                          (shell "npx shadow-cljs watch :app"))}}}
+                          (shell "npx shadow-cljs watch :app"))}
+
+  dev2       {:doc      "Launch the experimental, local dev environment."
+              :requires ([babashka.fs :as fs])
+              :task     (do
+                          (fs/delete-tree "public/js")
+                          (shell "npx shadow-cljs watch :app2"))}}}

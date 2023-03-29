@@ -364,28 +364,28 @@
        :z (o3d-reward results
             (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100)))))})))
 
+(defn into-3d-rf
+  ([state {:keys [x y z]}]
+   (let [last-x (peek (:x state))]
+     (if (= y (peek (:y state)))
+       ; same y, new x
+       (let [zs (get state :z)]
+         (assoc state
+           :x (if (and last-x (<= x last-x))
+                (:x state)
+                (conj (:x state) x))
+           :z (update zs (dec (count zs)) conj z)))
+       (assoc state
+         :x (if (and last-x (<= x last-x))
+              (:x state)
+              (conj (:x state) x))
+         :y (conj (:y state) y)
+         :z (conj (:z state) [z])))))
+  ([state] state))
+
 (defn compute-o3d [atom-3d lazy-3d-data-fn chunk-size]
   (reset! atom-3d {:x [] :y [] :z []})
-  (incr-into-atom atom-3d chunk-size
-    (fn
-      ([state {:keys [x y z]}]
-       (let [last-x (peek (:x state))]
-         (if (= y (peek (:y state)))
-           ; same y, new x
-           (let [zs (get state :z)]
-             (assoc state
-               :x (if (and last-x (<= x last-x))
-                    (:x state)
-                    (conj (:x state) x))
-               :z (update zs (dec (count zs)) conj z)))
-           (assoc state
-             :x (if (and last-x (<= x last-x))
-                  (:x state)
-                  (conj (:x state) x))
-             :y (conj (:y state) y)
-             :z (conj (:z state) [z])))))
-      ([state] state))
-    (lazy-3d-data-fn)))
+  (incr-into-atom atom-3d chunk-size into-3d-rf (lazy-3d-data-fn)))
 
 (defn plot-bet-noise-return3d [{:keys [width]}]
   (let [t (r/track compute-o3d bet-noise-return3d bet-noise-return-data3d 3)
@@ -438,13 +438,185 @@
       (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
     a))
 
+;; =============================================================================
+
+(defonce data-3d (r/atom {:x [] :y [] :z []}))
+(defonce data-3d2 (r/atom {:x [] :y [] :z []}))
+(defonce data-3d3 (r/atom {:x [] :y [] :z []}))
+
+(defn p-win-for-odds
+  "Given odds, return the probability of winning necessary for the bet to have
+  the `ev`."
+  [odds-multiplier ev]
+  (/ ev (+ odds-multiplier 1)))
+
+(defn odds-for-p-win [p-win ev]
+  (/ (- ev p-win) p-win))
+
+(defn -returns [bet-size p-win odds]
+  (let [final-returns
+        (peek
+          (peek
+            (simulate
+              {:rng-seed 1
+               :p-winf (constantly p-win)
+               :odds [(+ odds 1) 1]
+               :bet-size bet-size
+               :nps n-portfolios
+               :nbs 100
+               :sorted? false})))]
+    (vec
+      (doto (into-array final-returns)
+        garray/sort))))
+
+(defn compute-surface [p-win odds]
+  (into {}
+    (comp
+      (map #(/ % 100.0))
+      (map (juxt identity #(-returns % p-win odds))))
+    (range 1 101)))
+
+(defn optimal-bet-size [bet-size->returns p]
+  (let [idx (int (Math/floor (* (dec n-portfolios) (/ p 100))))]
+    (first
+      (reduce
+        (fn [[best-bet-size best-return] [bet-size returns]]
+          (let [return-for-p (nth returns idx 0)]
+            (if (> return-for-p best-return)
+              [bet-size return-for-p]
+              [best-bet-size best-return])))
+        [0 1]
+        bet-size->returns))))
+
+
+(defn compute-3d [ev]
+  (for [p-win (map #(/ % 20.0) (range 1 20))
+        :let [odds (odds-for-p-win p-win ev)
+              bet-size->returns (compute-surface p-win odds)]
+        p (range 5 75 1)
+        :let [optimal (optimal-bet-size bet-size->returns p)]]
+    {:x p
+     :y (enc/round2 p-win)
+     :z optimal}))
+
+(comment
+  (def computed
+    (compute-3d))
+
+  (compute-o3d data-3d #(compute-3d 1.1) 100)
+  (compute-o3d data-3d2 #(compute-3d 1.5) 100)
+  (compute-o3d data-3d3 #(compute-3d 5) 100)
+
+  (count (pr-str @data-3d))
+
+  (defn download-file [text filename]
+    (let [blob (js/Blob. (array text) #js {:type "text/plain"})
+          url (js/URL.createObjectURL blob)
+          link (js/document.createElement "a")]
+      (set! (.-href link) url)
+      (set! (.-download link) filename)
+      (js/document.body.appendChild link)
+      (.click link)
+      (js/document.body.removeChild link)))
+
+  (download-file (pr-str {1.1 @data-3d 1.5 @data-3d2 5 @data-3d3}) "three-d-plots.edn")
+  )
+
+(comment
+  (def pid "G__8")
+
+  (def plot (.getElementById js/document pid))
+
+  (.on plot "plotly_hover" #(let [selectedPoints (.-points %)]
+                                 (println "X")
+                                 (doseq [point selectedPoints]
+                                   (let [traceIndex (.-curveNumber point)
+                                         xCoord (.-x point)
+                                         yCoord (.-y point)
+                                         zCoord (.-z point)]
+                                     ;; Do something with the trace index and coordinates
+                                     (println (str "Trace Index: " traceIndex))
+                                     (println (str "X Coord: " xCoord))
+                                     (println (str "Y Coord: " yCoord))
+                                     (println (str "Z Coord: " zCoord))))))
+  )
+
+(defn p3d [{:keys [width]}]
+  (let [#_#_t (r/track compute-o3d data-3d compute 1)
+        {:keys [x y z]} @data-3d]
+    #_@t
+    [plotly/plotly
+     {:data   [{:x          x
+                :y          y
+                :z          z
+                :opacity    1
+                :showlegend false
+                :showscale  false
+                :type       :surface
+                :name      "2.5x EV"
+                :colorscale [[0, "rgb(255,245,240)"],
+                             [0.125, "rgb(254,224,210)"],
+                             [0.25, "rgb(252,187,161)"],
+                             [0.375, "rgb(252,146,114)"],
+                             [0.5, "rgb(251,106,74)"],
+                             [0.625, "rgb(239,59,44)"],
+                             [0.75, "rgb(203,24,29)"],
+                             [0.875, "rgb(165,15,21)"],
+                             [1, "rgb(103,0,13)"]]}
+               (let [{:keys [x y z]} @data-3d2]
+                 {:x          x
+                  :y          y
+                  :z          z
+                  :opacity    1
+                  :showlegend false
+                  :type       :surface
+                  :showscale  false
+                  :name       "1.5x EV"
+                  :colorscale [[0, "rgb(158,202,225)"],
+                               [0.125, "rgb(49,130,189)"],
+                               [0.25, "rgb(34,94,168)"],
+                               [0.375, "rgb(29,62,115)"],
+                               [0.5, "rgb(8,29,88)"],
+                               [0.625, "rgb(37,52,148)"],
+                               [0.75, "rgb(34,94,168)"],
+                               [0.875, "rgb(29,62,115)"],
+                               [1, "rgb(8,29,88)"]]})
+               (let [{:keys [x y z]} @data-3d3]
+                 {:x          x
+                  :y          y
+                  :z          z
+                  :opacity    1
+                  :showlegend false
+                  :type       :surface
+                  :showscale  false
+                  :name       "3.5x EV"
+                  :colorscale [[0, "rgb(247,252,245)"],
+                               [0.125, "rgb(229,245,224)"],
+                               [0.25, "rgb(199,233,192)"],
+                               [0.375, "rgb(161,217,155)"],
+                               [0.5, "rgb(116,196,118)"],
+                               [0.625, "rgb(65,171,93)"],
+                               [0.75, "rgb(35,139,69)"],
+                               [0.875, "rgb(0,109,44)"],
+                               [1, "rgb(0,68,27)"]]})]
+      :layout {:scene  {:xaxis {:title "percentile" #_#_:range [1 10]}
+                        :yaxis {:title "p(win)" #_#_:range [0 100]}
+                        :zaxis {:title "optimal bet size"}}
+               :margin {:t 0 :b 0}
+               :width  width
+               :height 800}}]))
+
+;; =============================================================================
+
 (defn app []
   (let [large-window? (> @window 900)
         plot-width (if large-window?
                      (- (enc/clamp 400 1000 (/ @window 2)) 20)
                      (- @window 50))]
-
-    [:div
+    [:div {:style {:display (if (:large-plots? @controls3d) :grid :flex)
+                   :justify-content :center}}
+     [p3d {:width plot-width}]]
+    #_[:div
      [:div {:style {:display (if large-window? :flex :grid)
                     :justify-content :center}}
       (let [{:keys [data]} (portfolio-simulation-plot-data)]
@@ -465,7 +637,7 @@
              plot-width (if (:large-plots? @controls3d) plot-width (- (/ @window 2) 20))]
          [:div {:style {:display (if (:large-plots? @controls3d) :grid :flex)
                         :justify-content :center}}
-          #_[plot-bet-noise-return3d {:width plot-width}]
+          [plot-bet-noise-return3d {:width plot-width}]
           [plot-bet-return3d {:width plot-width}]]))]))
 
 ;;; Lifecycle / entry point
@@ -475,7 +647,7 @@
   (js/MutationObserver. (fn [_ _] (get-or-create-popout-arrow))))
 
 (defn start []
-  (rdom/render [app] (.getElementById js/document "app"))
+  #_(rdom/render [app] (.getElementById js/document "app"))
   (.observe leva-popout-arrow-hack (.getElementById js/document "app")
     #js {:childList true :subtree true}))
 

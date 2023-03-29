@@ -1,3 +1,6 @@
+;; TODO: 3d chart
+;; TODO: Preload chart contents
+;; TODO: Is memoize not having an effect because of pwinf?
 (ns com.mjdowney.kelly-simulator
   (:require [com.mjdowney.kelly.incremental :refer [incr-into-atom]]
             [com.mjdowney.kelly.leva :as leva]
@@ -8,7 +11,8 @@
             [reagent.core :as r]
             [reagent.dom :as rdom]
             ["seedrandom" :as seedrandom]
-            [taoensso.encore :as enc]))
+            [taoensso.encore :as enc])
+  (:require-macros [com.mjdowney.kelly-simulator :refer [plot-data-3d]]))
 
 ;;; Parameters and helper fns
 
@@ -378,6 +382,102 @@
             :f> identity
             :!state nthp}]]]))))
 
+;;; 3d plots
+
+(def cscale-red
+  [[0, "rgb(255,245,240)"],
+   [0.125, "rgb(254,224,210)"],
+   [0.25, "rgb(252,187,161)"],
+   [0.375, "rgb(252,146,114)"],
+   [0.5, "rgb(251,106,74)"],
+   [0.625, "rgb(239,59,44)"],
+   [0.75, "rgb(203,24,29)"],
+   [0.875, "rgb(165,15,21)"],
+   [1, "rgb(103,0,13)"]])
+
+(def cscale-blue
+  [[0, "rgb(158,202,225)"],
+   [0.125, "rgb(49,130,189)"],
+   [0.25, "rgb(34,94,168)"],
+   [0.375, "rgb(29,62,115)"],
+   [0.5, "rgb(8,29,88)"],
+   [0.625, "rgb(37,52,148)"],
+   [0.75, "rgb(34,94,168)"],
+   [0.875, "rgb(29,62,115)"],
+   [1, "rgb(8,29,88)"]])
+
+(def cscale-green
+  [[0, "rgb(247,252,245)"],
+   [0.125, "rgb(229,245,224)"],
+   [0.25, "rgb(199,233,192)"],
+   [0.375, "rgb(161,217,155)"],
+   [0.5, "rgb(116,196,118)"],
+   [0.625, "rgb(65,171,93)"],
+   [0.75, "rgb(35,139,69)"],
+   [0.875, "rgb(0,109,44)"],
+   [1, "rgb(0,68,27)"]])
+
+(def data-3d (into (sorted-map) (plot-data-3d)))
+(defonce selected-3d (r/atom #{1.1}))
+
+(defn selection-3d [s]
+  [:<>
+   (doall
+     (for [ev (keys data-3d)]
+       ^{:key ev}
+       [:button
+        {:on-click (fn [e]
+                     (if (contains? @s ev)
+                       (swap! s disj ev)
+                       (swap! s conj ev)))
+         :style {:width "5em"
+                 :background "white"
+                 :border (if (contains? @s ev) "2px solid black" "1px solid gray")}}
+        (str "EV = " ev)]))])
+
+(defn -plot-3d []
+  (letfn [(trace [data name cscale]
+            {:x          (:x data)
+             :y          (:y data)
+             :z          (:z data)
+             :opacity    1
+             :showlegend false
+             :showscale  false
+             :type       :surface
+             :name      name
+             :colorscale cscale})]
+    (let [large-window? (> @window 900)
+          plot-width (if large-window?
+                       (- (enc/clamp 400 800 (/ @window 2)) 50)
+                       (- @window 50))]
+      [:div {:style {:font-weight 100}}
+
+       [:div.container
+        [:span "some 3d stuff"]
+        [:br]
+        [:span "optimizing for some such"]]
+
+       [:div {:style {:display (if large-window? :flex :grid)
+                      :justify-content :center
+                      :margin-top "20px"}}
+        [plotly/plotly
+         {:data   (->> (map
+                         (fn [[ev data] cscale]
+                           (when (contains? @selected-3d ev)
+                             (trace data (str "EV = " ev) cscale)))
+                         data-3d
+                         [cscale-red cscale-blue cscale-green])
+                       (filter some?)
+                       (into []))
+          :layout {:scene  {:xaxis {:title "percentile" #_#_:range [1 10]}
+                            :yaxis {:title "p(win)" #_#_:range [0 100]}
+                            :zaxis {:title "optimal bet size"}}
+                   :margin {:t 0 :b 0}
+                   :width  plot-width
+                   :height 800}}]]
+       [:div.container {:style {:display :flex :justify-content :center :gap "10px" :margin-top "10px"}}
+        [selection-3d selected-3d]]])))
+
 ;;; Lifecycle / entry point
 
 (defn start []
@@ -385,6 +485,7 @@
   (rdom/render [-uncertainty] (.getElementById js/document "uncertainty-sim"))
   (rdom/render [-risk-of-ruin] (.getElementById js/document "risk-of-ruin-sim"))
   (rdom/render [-downside-risk] (.getElementById js/document "downside-risk-sim"))
+  (rdom/render [-plot-3d] (.getElementById js/document "plot-3d"))
 
   ; Set callbacks to modify the parameters for each plot, so that the page can
   ; add links which call e.g. window.setUncertaintyParameters({'bet': 0.5})

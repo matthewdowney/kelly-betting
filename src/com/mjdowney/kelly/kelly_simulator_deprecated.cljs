@@ -1,4 +1,7 @@
-(ns com.mjdowney.kelly-noise
+;; Older version of the main namespace, using Leva controls. This was cool for
+;; exploring the probability space, but harder to present well on a blog page.
+;; Leaving it here in case I want to modify it in the future.
+(ns com.mjdowney.kelly.kelly-simulator-deprecated
   (:require [com.mjdowney.kelly.incremental :refer [incr-into-atom]]
             [com.mjdowney.kelly.leva :as leva]
             [com.mjdowney.kelly.plotly :as plotly]
@@ -409,7 +412,7 @@
 
 (defn plot-bet-return3d [{:keys [width]}]
   (let [{:keys [bet-sizes percentiles log-return?]} @controls3d
-        t (r/track compute-o3d bet-return3d bet-return-data3d 50)
+        t (r/track compute-o3d bet-return3d bet-return-data3d 250)
         {:keys [x y z]} @bet-return3d]
     @t
     [plotly/plotly
@@ -462,7 +465,7 @@
              plot-width (if (:large-plots? @controls3d) plot-width (- (/ @window 2) 20))]
          [:div {:style {:display (if (:large-plots? @controls3d) :grid :flex)
                         :justify-content :center}}
-          [plot-bet-noise-return3d {:width plot-width}]
+          #_[plot-bet-noise-return3d {:width plot-width}]
           [plot-bet-return3d {:width plot-width}]]))]))
 
 ;;; Lifecycle / entry point

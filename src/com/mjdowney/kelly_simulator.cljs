@@ -14,7 +14,7 @@
 
 (def n-portfolios 100)
 (def n-bets 100)
-(def nth-perc 50) ; optimize for 50th percentile
+#_(def nth-perc 50) ; optimize for 50th percentile
 (def simulate (enc/memoize-last sim/simulate))
 (defn vbutlast "`butlast` for vectors" [v] (subvec v 0 (dec (count v))))
 
@@ -23,7 +23,7 @@
         [fw fl] frac-win-lose]
     (- (/ pw* fl) (/ (- 1 pw*) (- fw 1)))))
 
-(defn portfolio-simulation-plot-data [results]
+(defn portfolio-simulation-plot-data [results nth-perc]
   (let [nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100))))
         nth-perc-returns (mapv #(nth % nth-percentile-idx) (peek results))]
     {:nth-percentile nth-perc
@@ -44,8 +44,8 @@
                :name        (str "p" nth-perc)}])}))
 
 (defn simulated-portfolios-plot
-  [{:keys [pw p-ruin noise bet plot-width odds]
-    :or   {noise 0.0 p-ruin 0.0 odds [2 1]}}]
+  [{:keys [pw p-ruin noise bet plot-width odds nth-perc]
+    :or   {noise 0.0 p-ruin 0.0 odds [2 1] nth-perc 50}}]
   (let [params {:rng-seed 1
                 :p-winf   (if (pos? noise)
                             (sim/random-pwin-fn pw noise)
@@ -56,8 +56,10 @@
                 :nps      n-portfolios
                 :nbs      n-bets
                 :sorted?  true}
-        {:keys [data return nth-percentile]} (portfolio-simulation-plot-data (simulate params))
-        title (str "p" nth-percentile " return = "
+        {:keys [data return]} (portfolio-simulation-plot-data
+                                (simulate params)
+                                nth-perc)
+        title (str "p" nth-perc " return = "
                    (if (< 0.10 return 1000.0)
                      (str (enc/round2 return) "x")
                      (str "10^" (enc/round1 (Math/log10 return)))))]
@@ -72,7 +74,8 @@
 
 ;; Uncertainty
 
-(defn bet-size-optimization-data [params]
+(defn bet-size-optimization-data
+  [{:keys [nth-perc] :or {nth-perc 50} :as params}]
   (let [nth-percentile-idx (int
                              (Math/floor
                                (* (dec n-portfolios)
@@ -121,8 +124,8 @@
 
 (defn optimal-bet-size-plot [_params]
   (let [get-bsod (bsod-getter)]
-    (fn [{:keys [pw noise bet plot-width odds p-ruin]
-          :or {odds [2 1] p-ruin 0.0 noise 0.0}}]
+    (fn [{:keys [pw noise bet plot-width odds p-ruin nth-perc shade?]
+          :or {odds [2 1] p-ruin 0.0 noise 0.0 nth-perc 50 shade? false}}]
       (let [params {:rng-seed 1
                     ; compute the fn later so that the params memoize
                     :p-winf   [pw noise]
@@ -131,6 +134,7 @@
                     :bet-size bet
                     :nps      n-portfolios
                     :nbs      n-bets
+                    :nth-perc nth-perc
                     :sorted?  false}
             bsod (get-bsod params)
             idx (int (* bet 100))
@@ -165,6 +169,17 @@
                       :showlegend true}]
                     []))
           :layout {:title "Return multiple by bet size"
+                   :shapes (when (and shade? (:complete bsod))
+                             [{:type "rect"
+                               :xref "x"
+                               :x0 (get-in bsod [:best 0])
+                               :x1 (nth (:x bsod) idx' nil)
+
+                               :yref "paper" :y0 0 :y1 1
+                               :fillcolor "LightSalmon"
+                               :opacity 0.5
+                               :line {:width 0}
+                               :layer "below"}])
                    :xaxis {:title "bet size (fraction of bankroll)"
                            :range [0 1]}
                    :margin {:r 30 :t 60}
@@ -286,17 +301,60 @@
                    :max (int (* (- 1.0 @pwin) 100))
                    :!state p-ruin}]]]))))
 
+;; N.b. odds here are [win-frac loss-frac] not 'N:N'
+(def drparams (r/atom {:pw 0.70 :bet 0.30 :win-frac 2 :lose-frac 1 :nth-perc 10}))
+
+(defn -downside-risk []
+  (let [bet-size (r/cursor drparams [:bet])
+        pwin (r/cursor drparams [:pw])
+        nthp (r/cursor drparams [:nth-perc])]
+    (fn []
+      (let [large-window? (> @window 900)
+            plot-width (if large-window?
+                         (- (enc/clamp 400 800 (/ @window 2)) 20)
+                         (- @window 50))]
+
+        [:div {:style {:font-weight 100}}
+         [:div.container
+          [:span
+           "p" @nthp " of " n-portfolios " portfolios wagering " n-bets
+           " times with p(win) = " (dec->perc @pwin) "%"]]
+         (let [params (assoc @drparams :plot-width plot-width)
+               params (assoc params :odds ((juxt :win-frac :lose-frac) params))]
+           [:div {:style {:display (if large-window? :flex :grid)
+                          :justify-content :center
+                          :margin-top "20px"}}
+            [simulated-portfolios-plot params]
+            [optimal-bet-size-plot (assoc params :shade? true)]])
+
+         [:div.container
+          [slider {:lbl> (fn [x] (str "Bet fraction = " x)) :!state bet-size}]
+          [slider {:lbl> (fn [x] (str "P(win) = " x)) :!state pwin}]
+          [slider
+           {:lbl> (fn [x] (str "nth percentile = " x))
+            :f< identity
+            :f> identity
+            :!state nthp}]]]))))
+
 ;;; Lifecycle / entry point
 (defn start []
   (rdom/render [-uncertainty] (.getElementById js/document "uncertainty-sim"))
   (rdom/render [-risk-of-ruin] (.getElementById js/document "risk-of-ruin-sim"))
+  (rdom/render [-downside-risk] (.getElementById js/document "downside-risk-sim"))
+
   (set! (.-setUncertaintyParameters js/window)
     (fn [e ps]
       (swap! uparams merge (js->clj ps :keywordize-keys true))
       (.preventDefault e)))
+
   (set! (.-setRiskOfRuinParameters js/window)
     (fn [e ps]
       (swap! rparams merge (js->clj ps :keywordize-keys true))
+      (.preventDefault e)))
+
+  (set! (.-setDownsideParameters js/window)
+    (fn [e ps]
+      (swap! drparams merge (js->clj ps :keywordize-keys true))
       (.preventDefault e))))
 
 (defn stop [] (js/console.log "stopping..."))

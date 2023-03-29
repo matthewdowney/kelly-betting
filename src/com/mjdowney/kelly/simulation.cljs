@@ -42,6 +42,7 @@
     - :rng-seed  seed for a deterministic random number generator
     - :p-winf    (fn [rng] => p-win ∈ [0, 1]), where rng generates uniform
                  numbers in [0, 1]
+    - :p-ruin    Optionally, a risk of total ruin.
     - :odds      A vector of [frac-win frac-lose]. If losing a wager means
                  losing the whole stake, frac-lose = 1.
 
@@ -55,7 +56,7 @@
     - :nbs       The number of bets to make per portfolio.
     - :sorted?   If true, append a final element containing the sorted bankrolls
                  at each bet. If false, same, but don't sort it."
-  [{:keys [rng-seed p-winf odds bet-size nps nbs sorted?] :or {sorted? true}}]
+  [{:keys [rng-seed p-winf p-ruin odds bet-size nps nbs sorted?] :or {sorted? true p-ruin 0}}]
   (let [[fw fl] odds
         fw-minus-1 (- fw 1)
         rng (seedrandom rng-seed)
@@ -64,9 +65,11 @@
               (let [bankroll (peek portfolio)
                     wager (* bankroll (max bet-size 0))
                     pw (p-winf rng)
-                    val (if (<= (rng) pw)
-                          (+ bankroll (* wager fw-minus-1))
-                          (- bankroll (* wager fl)))]
+                    rn (rng)
+                    val (cond
+                          (<= rn p-ruin) (- bankroll wager)
+                          (<= rn (+ p-ruin pw)) (+ bankroll (* wager fw-minus-1))
+                          :else (- bankroll (* wager fl)))]
                 (.push all-portfolios-array val)
                 (conj portfolio val)))]
       (loop [n-bets nbs

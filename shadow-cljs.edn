@@ -13,7 +13,7 @@
                            :http-port 8020}}
 
           :site {:target :browser
-                 :output-dir "../matthewdowney.github.io/static/js/kelly-noise"
+                 :output-dir "../matthewdowney.github.io/static/js/kelly-simulator"
                  :asset-path "/static/js/kelly-simulator"
                  :modules {:main {:entries [com.mjdowney.kelly-simulator]}}
                  :devtools {:preloads [hashp.core]

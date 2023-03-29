@@ -10,18 +10,42 @@
             ["seedrandom" :as seedrandom]
             [taoensso.encore :as enc]))
 
-;;; Simulation
+;;; Parameters and helper fns
+
+(defonce window ; always the width of the current window
+  (let [a (r/atom (.-innerWidth js/window))]
+    (.addEventListener js/window "resize"
+      (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
+    a))
 
 (def n-portfolios 100)
 (def n-bets 100)
-#_(def nth-perc 50) ; optimize for 50th percentile
-(def simulate (enc/memoize-last sim/simulate))
+(defonce simulate (enc/memoize-last sim/simulate))
 (defn vbutlast "`butlast` for vectors" [v] (subvec v 0 (dec (count v))))
+(defn r2 [n] (.toFixed n 2))
 
 (defn kelly-bet [{:keys [p-win-lose frac-win-lose]}]
   (let [[pw* _pl] p-win-lose
         [fw fl] frac-win-lose]
     (- (/ pw* fl) (/ (- 1 pw*) (- fw 1)))))
+
+(defn dec->perc [x] (int (* 100 x)))
+(defn perc->dec [x] (/ x 100.0))
+
+(defn slider [{:keys [lbl> f> f< !state min max step]
+               :or {min 0 max 100 step 1 f> dec->perc f< perc->dec}}]
+  [:div {:style {:display :flex :align-items :baseline :gap "1em"}}
+   [:p {:style {:min-width "25%" :text-align :right :margin-bottom 0 :font-size "0.75em"}}
+    (lbl> @!state)]
+   [:input
+    {:type "range"
+     :min min
+     :max max
+     :step step
+     :value (f> @!state)
+     :on-change #(reset! !state (-> % .-target .-value f<))}]])
+
+;;; Base plot for showing monte carlo of all portfolios
 
 (defn portfolio-simulation-plot-data [results nth-perc]
   (let [nth-percentile-idx (int (Math/floor (* (dec n-portfolios) (/ nth-perc 100))))
@@ -61,7 +85,7 @@
                                 nth-perc)
         title (str "p" nth-perc " return = "
                    (if (< 0.10 return 1000.0)
-                     (str (enc/round2 return) "x")
+                     (str (r2 return) "x")
                      (str "10^" (enc/round1 (Math/log10 return)))))]
     [plotly/plotly
      {:data data
@@ -72,7 +96,7 @@
                :margin {:r 10 :t 60}
                :width  plot-width}}]))
 
-;; Uncertainty
+;;; Base plot for optimizing bet size
 
 (defn bet-size-optimization-data
   [{:keys [nth-perc] :or {nth-perc 50} :as params}]
@@ -98,9 +122,10 @@
                       (optimize* best (inc n)))))))]
       (cons {:x 0 :y 1 :best [0 1]} (optimize* [0 1] 1)))))
 
-(defn bsod-getter []
+(defn bsod-getter [theo+opt]
   (let [bsod (r/atom nil)]
     (letfn [(recompute [{:keys [p-winf] :as params}]
+              (reset! theo+opt nil)
               (swap! bsod assoc :x [] :y [] :best nil :complete false)
               (incr-into-atom bsod 10
                 (fn
@@ -122,10 +147,10 @@
           (recompute (dissoc params :bet-size))
           @bsod)))))
 
-(defn optimal-bet-size-plot [_params]
-  (let [get-bsod (bsod-getter)]
-    (fn [{:keys [pw noise bet plot-width odds p-ruin nth-perc shade?]
-          :or {odds [2 1] p-ruin 0.0 noise 0.0 nth-perc 50 shade? false}}]
+(defn optimal-bet-size-plot [params]
+  (let [get-bsod (bsod-getter (:theo+opt params))]
+    (fn [{:keys [pw noise bet plot-width odds p-ruin nth-perc shade? theo+opt]
+          :or {odds [2 1] p-ruin 0.0 noise 0.0 nth-perc 50 shade? true}}]
       (let [params {:rng-seed 1
                     ; compute the fn later so that the params memoize
                     :p-winf   [pw noise]
@@ -139,7 +164,15 @@
             bsod (get-bsod params)
             idx (int (* bet 100))
             f* (kelly-bet {:p-win-lose [pw (- 1 pw)] :frac-win-lose odds})
+            optimal (get-in bsod [:best 0])
             idx' (int (* (enc/round2 f*) 100))]
+
+        (when (and
+                (:complete bsod)
+                theo+opt
+                (not= (.-state theo+opt) [f* optimal]))
+          (reset! theo+opt [f* optimal]))
+
         [plotly/plotly
          {:data (into
                  [(assoc bsod
@@ -185,37 +218,15 @@
                    :margin {:r 30 :t 60}
                    :width  plot-width}}]))))
 
-;;; Main
+;;; First section: uncertainty plots
 
-(defonce window
-  (let [a (r/atom (.-innerWidth js/window))]
-    (.addEventListener js/window "resize"
-      (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
-    a))
-
-(defn dec->perc [x] (int (* 100 x)))
-(defn perc->dec [x] (/ x 100.0))
-
-(defn slider [{:keys [lbl> f> f< !state min max step]
-               :or {min 0 max 100 step 1
-                    f> dec->perc
-                    f< perc->dec}}]
-  [:div {:style {:display :flex :align-items :baseline :gap "1em"}}
-   [:p {:style {:min-width "25%" :text-align :right :margin-bottom 0 :font-size "0.75em"}} (lbl> @!state)]
-   [:input
-    {:type "range"
-     :min min
-     :max max
-     :step step
-     :value (f> @!state)
-     :on-change #(reset! !state (-> % .-target .-value f<))}]])
-
-(def uparams (r/atom {:pw 0.70 :bet 0.10 :noise 0.0}))
+(defonce uparams (r/atom {:pw 0.70 :bet 0.10 :noise 0.0}))
 
 (defn -uncertainty []
   (let [bet-size (r/cursor uparams [:bet])
         noise (r/cursor uparams [:noise])
-        pwin (r/cursor uparams [:pw])]
+        pwin (r/cursor uparams [:pw])
+        theo+opt (r/atom nil nil)]
     (fn []
       (let [large-window? (> @window 900)
             plot-width (if large-window?
@@ -226,8 +237,16 @@
          [:div.container
           [:span
            "Simulation of " n-portfolios " portfolios wagering " n-bets
-           " times with p(win) = " (dec->perc @pwin) "%"]]
-         (let [params (assoc @uparams :plot-width plot-width)]
+           " times with p(win) = " [:span.normal (dec->perc @pwin) "%"]]
+          [:br]
+          [:span "uncertainty "
+           [:span.normal "σ = " @noise]
+           (when-let [[t o] @theo+opt]
+             [:<> " moves optimal bet fraction from "
+              [:span.normal (r2 t)]
+              "\u2192"
+              [:span.normal (r2 o)] "."])]]
+         (let [params (assoc @uparams :plot-width plot-width :theo+opt theo+opt)]
            [:div {:style {:display (if large-window? :flex :grid)
                           :justify-content :center
                           :margin-top "20px"}}
@@ -239,8 +258,10 @@
           [slider {:lbl> (fn [x] (str "Uncertainty σ = " x)) :!state noise}]
           [slider {:lbl> (fn [x] (str "P(win) = " x)) :!state pwin}]]]))))
 
+;;; Second section: risk of ruin plots
+
 ;; N.b. odds here are [win-frac loss-frac] not 'N:N'
-(def rparams
+(defonce rparams
   (r/atom
     {:pw 0.60
      :p-ruin 0.00
@@ -268,7 +289,8 @@
         p-ruin (r/cursor rparams [:p-ruin])
         pwin (r/cursor rparams [:pw])
         wfrac (r/cursor rparams [:win-frac])
-        lfrac (r/cursor rparams [:lose-frac])]
+        lfrac (r/cursor rparams [:lose-frac])
+        theo+opt (r/atom nil)]
     (fn []
       (let [large-window? (> @window 900)
             plot-width (if large-window?
@@ -279,10 +301,18 @@
          [:div.container
           [:span
            "Simulation of " n-portfolios " portfolios wagering " n-bets
-           " times with p(win) = " (dec->perc @pwin) "%,"
-           " p(ruin) = " (dec->perc @p-ruin) "%"]]
+           " times with p(win) = " [:span.normal (dec->perc @pwin) "%"]]
+          [:br]
+          [:span "risk of ruin = "
+           [:span.normal @p-ruin]
+           (when-let [[t o] @theo+opt]
+             [:<> " moves optimal bet fraction from "
+              [:span.normal (r2 t)]
+              "\u2192"
+              [:span.normal (r2 o)] "."])]]
          (let [params (assoc @rparams :plot-width plot-width)
-               params (assoc params :odds ((juxt :win-frac :lose-frac) params))]
+               params (assoc params :odds ((juxt :win-frac :lose-frac) params)
+                        :theo+opt theo+opt)]
            [:div {:style {:display (if large-window? :flex :grid)
                           :justify-content :center
                           :margin-top "20px"}}
@@ -301,13 +331,16 @@
                    :max (int (* (- 1.0 @pwin) 100))
                    :!state p-ruin}]]]))))
 
+;;; Final section: downside risk mitigation plots
+
 ;; N.b. odds here are [win-frac loss-frac] not 'N:N'
-(def drparams (r/atom {:pw 0.70 :bet 0.30 :win-frac 2 :lose-frac 1 :nth-perc 10}))
+(defonce drparams (r/atom {:pw 0.70 :bet 0.30 :win-frac 2 :lose-frac 1 :nth-perc 10}))
 
 (defn -downside-risk []
   (let [bet-size (r/cursor drparams [:bet])
         pwin (r/cursor drparams [:pw])
-        nthp (r/cursor drparams [:nth-perc])]
+        nthp (r/cursor drparams [:nth-perc])
+        theo+opt (r/atom nil)]
     (fn []
       (let [large-window? (> @window 900)
             plot-width (if large-window?
@@ -318,14 +351,23 @@
          [:div.container
           [:span
            "p" @nthp " of " n-portfolios " portfolios wagering " n-bets
-           " times with p(win) = " (dec->perc @pwin) "%"]]
+           " times with p(win) = " [:span.normal (dec->perc @pwin) "%"]]
+          [:br]
+          [:span "optimizing for "
+           [:span.normal "p" @nthp]
+           (when-let [[t o] @theo+opt]
+             [:<> " moves optimal bet fraction from "
+              [:span.normal (r2 t)]
+              "\u2192"
+              [:span.normal (r2 o)] "."])]]
          (let [params (assoc @drparams :plot-width plot-width)
-               params (assoc params :odds ((juxt :win-frac :lose-frac) params))]
+               params (assoc params :odds ((juxt :win-frac :lose-frac) params)
+                        :theo+opt theo+opt)]
            [:div {:style {:display (if large-window? :flex :grid)
                           :justify-content :center
                           :margin-top "20px"}}
             [simulated-portfolios-plot params]
-            [optimal-bet-size-plot (assoc params :shade? true)]])
+            [optimal-bet-size-plot params]])
 
          [:div.container
           [slider {:lbl> (fn [x] (str "Bet fraction = " x)) :!state bet-size}]
@@ -337,11 +379,15 @@
             :!state nthp}]]]))))
 
 ;;; Lifecycle / entry point
+
 (defn start []
+  ; Inject all plots
   (rdom/render [-uncertainty] (.getElementById js/document "uncertainty-sim"))
   (rdom/render [-risk-of-ruin] (.getElementById js/document "risk-of-ruin-sim"))
   (rdom/render [-downside-risk] (.getElementById js/document "downside-risk-sim"))
 
+  ; Set callbacks to modify the parameters for each plot, so that the page can
+  ; add links which call e.g. window.setUncertaintyParameters({'bet': 0.5})
   (set! (.-setUncertaintyParameters js/window)
     (fn [e ps]
       (swap! uparams merge (js->clj ps :keywordize-keys true))

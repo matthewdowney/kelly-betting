@@ -1,6 +1,4 @@
 ;; TODO: 3d chart
-;; TODO: Preload chart contents
-;; TODO: Is memoize not having an effect because of pwinf?
 (ns com.mjdowney.kelly-simulator
   (:require [com.mjdowney.kelly.incremental :refer [incr-into-atom]]
             [com.mjdowney.kelly.leva :as leva]
@@ -20,6 +18,12 @@
   (let [a (r/atom (.-innerWidth js/window))]
     (.addEventListener js/window "resize"
       (gfn/debounce #(reset! a (.-innerWidth js/window)) 100))
+    a))
+
+(defonce height ; always the height of the current window
+  (let [a (r/atom (.-innerHeight js/window))]
+    (.addEventListener js/window "resize"
+      (gfn/debounce #(reset! a (.-innerHeight js/window)) 100))
     a))
 
 (def n-portfolios 100)
@@ -435,7 +439,16 @@
                  :border (if (contains? @s ev) "2px solid black" "1px solid gray")}}
         (str "EV = " ev)]))])
 
-(defn -plot-3d []
+(def point3d (r/atom nil))
+
+(defn -on-plotly-hover [e]
+  (let [selectedPoints (.-points e)]
+    (doseq [point selectedPoints]
+      (let [traceidx (.-curveNumber point)]
+        (when-let [ev (nth (filter @selected-3d (keys data-3d)) traceidx nil)]
+          (reset! point3d [ev (.-x point) (.-y point) (.-z point)]))))))
+
+(defn -plot-3d* [selected-3d]
   (letfn [(trace [data name cscale]
             {:x          (:x data)
              :y          (:y data)
@@ -444,39 +457,42 @@
              :showlegend false
              :showscale  false
              :type       :surface
-             :name      name
+             :name       name
              :colorscale cscale})]
-    (let [large-window? (> @window 900)
-          plot-width (if large-window?
-                       (- (enc/clamp 400 800 (/ @window 2)) 50)
-                       (- @window 50))]
-      [:div {:style {:font-weight 100}}
+    [plotly/plotly
+     {:data           (->> (map
+                             (fn [[ev data] cscale]
+                               (when (contains? @selected-3d ev)
+                                 (trace data (str "EV = " ev) cscale)))
+                             data-3d
+                             [cscale-red cscale-blue cscale-green])
+                           (filter some?)
+                           (into []))
+      :layout         {:scene  {:xaxis {:title "percentile"}
+                                :yaxis {:title "p(win)"}
+                                :zaxis {:title "optimal bet size"}}
+                       :margin {:t 0 :b 0 :l 0 :r 0}
+                       :height (max 400 (/ @height 2))}
+      :event->handler {:plotly_hover -on-plotly-hover}}]))
 
-       [:div.container
-        [:span "some 3d stuff"]
-        [:br]
-        [:span "optimizing for some such"]]
+(defn -plot-3d []
+  [:div {:style {:font-weight 100}}
 
-       [:div {:style {:display (if large-window? :flex :grid)
-                      :justify-content :center
-                      :margin-top "20px"}}
-        [plotly/plotly
-         {:data   (->> (map
-                         (fn [[ev data] cscale]
-                           (when (contains? @selected-3d ev)
-                             (trace data (str "EV = " ev) cscale)))
-                         data-3d
-                         [cscale-red cscale-blue cscale-green])
-                       (filter some?)
-                       (into []))
-          :layout {:scene  {:xaxis {:title "percentile" #_#_:range [1 10]}
-                            :yaxis {:title "p(win)" #_#_:range [0 100]}
-                            :zaxis {:title "optimal bet size"}}
-                   :margin {:t 0 :b 0}
-                   :width  plot-width
-                   :height 800}}]]
-       [:div.container {:style {:display :flex :justify-content :center :gap "10px" :margin-top "10px"}}
-        [selection-3d selected-3d]]])))
+   [:div.container
+    [:span "some 3d stuff"]
+    [:br]
+    [:span "optimizing for some such"]]
+
+   [:div {:style {:display :flex :justify-content :center :margin-top "20px"}}
+    [-plot-3d* selected-3d]]
+
+   [:div.container
+    [:div {:style {:display :flex
+                   :justify-content :center
+                   :gap "10px"
+                   :margin-top "10px"}}
+     [selection-3d selected-3d]]
+    [:p (pr-str @point3d)]]])
 
 ;;; Lifecycle / entry point
 

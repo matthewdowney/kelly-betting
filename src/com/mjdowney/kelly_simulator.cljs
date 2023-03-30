@@ -1,4 +1,3 @@
-;; TODO: 3d chart
 (ns com.mjdowney.kelly-simulator
   (:require [com.mjdowney.kelly.incremental :refer [incr-into-atom]]
             [com.mjdowney.kelly.leva :as leva]
@@ -217,7 +216,9 @@
                                :x1 (nth (:x bsod) idx' nil)
 
                                :yref "paper" :y0 0 :y1 1
-                               :fillcolor "LightSalmon"
+                               :fillcolor (if (> (get-in bsod [:best 0]) (nth (:x bsod) idx' 0))
+                                            "LightGreen"
+                                            "LightSalmon")
                                :opacity 0.5
                                :line {:width 0}
                                :layer "below"}])
@@ -342,7 +343,7 @@
 ;;; Final section: downside risk mitigation plots
 
 ;; N.b. odds here are [win-frac loss-frac] not 'N:N'
-(defonce drparams (r/atom {:pw 0.70 :bet 0.30 :win-frac 2 :lose-frac 1 :nth-perc 10}))
+(defonce drparams (r/atom {:pw 0.70 :bet 0.30 :win-frac 2 :lose-frac 1 :nth-perc 30}))
 
 (defn -downside-risk []
   (let [bet-size (r/cursor drparams [:bet])
@@ -475,13 +476,22 @@
                        :height (max 400 (/ @height 2))}
       :event->handler {:plotly_hover -on-plotly-hover}}]))
 
+(defn odds-for-p-win [p-win ev]
+  (/ (- ev p-win) p-win))
+
 (defn -plot-3d []
   [:div {:style {:font-weight 100}}
 
-   [:div.container
-    [:span "some 3d stuff"]
-    [:br]
-    [:span "optimizing for some such"]]
+   (when-let [[ev x y z] @point3d]
+     (let [odds (odds-for-p-win y ev)
+           f* (- y (/ (- 1.0 y) odds))]
+       [:div.container
+        [:span "For a wager with " [:span.normal "p(win) = " y] " and a "
+         [:span.normal (enc/round2 (inc odds)) "x"] " return (EV = " ev "x)"]
+        [:br]
+        [:span "optimizing for " [:span.normal "p" x]
+         " moves optimal bet fraction from " [:span.normal (r2 f*)] ;; TODO
+         "\u2192" [:span.normal (.toFixed z 2)]]]))
 
    [:div {:style {:display :flex :justify-content :center :margin-top "20px"}}
     [-plot-3d* selected-3d]]
@@ -491,8 +501,7 @@
                    :justify-content :center
                    :gap "10px"
                    :margin-top "10px"}}
-     [selection-3d selected-3d]]
-    [:p (pr-str @point3d)]]])
+     [selection-3d selected-3d]]]])
 
 ;;; Lifecycle / entry point
 
